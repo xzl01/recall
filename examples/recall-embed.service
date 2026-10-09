@@ -1,0 +1,12 @@
+[Unit]
+Description=Recall local embedding service
+
+[Service]
+Type=simple
+UMask=0077
+ExecStart=%h/.local/bin/recall daemon --device CPU --idle-exit 0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

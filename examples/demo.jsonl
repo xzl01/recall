@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-01-01T10:00:00","message":{"role":"user","content":[{"type":"text","text":"Synthetic example: the ZephyrChronicle device uses Novara9 at address 0x12. This is demo data, not a real session."}]}}
+{"type":"message","timestamp":"2026-01-01T10:01:00","message":{"role":"assistant","content":[{"type":"text","text":"Synthetic example: configure the Novara9 timeout to 250 ms, and check the device log before retrying."}]}}

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recall-local"
+version = "0.1.0"
+description = "Local hybrid retrieval for agent history and source code"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "xzl01"}]
+dependencies = ["numpy>=1.24,<3", "tokenizers>=0.20,<1"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Text Processing :: Indexing",
+]
+
+[project.optional-dependencies]
+openvino = ["openvino>=2024.4,<2027"]
+setup = ["openvino>=2024.4,<2027", "optimum-intel>=2.2,<3", "transformers>=4.44,<5", "torch>=2,<3", "huggingface-hub>=0.26,<1"]
+dev = ["pytest>=8,<10", "build>=1,<2", "ruff>=0.12,<1"]
+
+[project.scripts]
+recall = "recall.cli:main"
+
+[project.urls]
+Repository = "https://github.com/xzl01/recall"
+Issues = "https://github.com/xzl01/recall/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

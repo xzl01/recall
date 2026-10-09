@@ -1,0 +1,7 @@
+[Unit]
+Description=Incrementally index Pi history with recall
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=%h/.local/bin/recall index sessions --device CPU

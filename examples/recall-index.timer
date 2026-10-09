@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly recall history indexing
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=recall-index.service
+
+[Install]
+WantedBy=timers.target
