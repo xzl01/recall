@@ -31,6 +31,25 @@ SESSIONS_DIR = (
     .expanduser()
     .resolve()
 )
+# 其它 agent 的历史位置。各自的落盘格式不同，读取器在 sources.py。
+DSH_SESSIONS_DIR = (
+    Path(os.environ.get("RECALL_DSH_SESSIONS_DIR", str(Path.home() / ".dsh/sessions")))
+    .expanduser()
+    .resolve()
+)
+CODEX_SESSIONS_DIR = (
+    Path(os.environ.get("RECALL_CODEX_SESSIONS_DIR", str(Path.home() / ".codex/sessions")))
+    .expanduser()
+    .resolve()
+)
+# opencode 已经迁到 SQLite：旧的 storage/ 目录是空的，历史都在这个库里。
+OPENCODE_DB = (
+    Path(
+        os.environ.get("RECALL_OPENCODE_DB", str(Path.home() / ".local/share/opencode/opencode.db"))
+    )
+    .expanduser()
+    .resolve()
+)
 SOCKET_PATH = (
     Path(os.environ.get("RECALL_SOCKET", str(DATA_DIR / "embed.sock"))).expanduser().resolve()
 )

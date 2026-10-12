@@ -27,9 +27,11 @@ openvino = ["openvino>=2024.4,<2027"]
 # 第三套后端，只在 RECALL_BACKEND=gguf 时启用。llama-cpp-python 没有预编译轮子，
 # 安装时会就地编译，需要 C++ 工具链和 cmake。
 gguf = ["llama-cpp-python>=0.3,<1", "gguf>=0.10,<1"]
+# DSH 的会话是 zstd 压缩的。Python 3.14+ 自带 compression.zstd，更早的版本需要它。
+dsh = ["zstandard>=0.22,<1"]
 # 只用于 OpenVINO 那条路：把 BGE 导出成 IR（需要 torch 与 optimum-intel）。
 setup = ["openvino>=2024.4,<2027", "optimum-intel>=2.2,<3", "transformers>=4.44,<5", "torch>=2,<3", "huggingface-hub>=0.26,<1"]
-dev = ["pytest>=8,<10", "build>=1,<2", "ruff>=0.12,<1"]
+dev = ["pytest>=8,<10", "build>=1,<2", "ruff>=0.12,<1", "zstandard>=0.22,<1"]
 
 [project.scripts]
 recall = "recall.cli:main"

@@ -17,6 +17,8 @@ import numpy as np
 from .embedding import Embedder
 from .daemon import resolve_embedder
 from .identity import model_identity
+from . import sources
+from .sources import iter_pi_file
 from .support import (
     token_windows,
     compact_query,
@@ -28,14 +30,33 @@ from .support import (
     WINDOW_TOKENS,
     OVERLAP_TOKENS,
 )
-from .config import DATA_DIR, SESSIONS_DIR, DEFAULT_DEVICE
+from .config import (
+    CODEX_SESSIONS_DIR,
+    DATA_DIR,
+    DEFAULT_DEVICE,
+    DSH_SESSIONS_DIR,
+    OPENCODE_DB,
+    SESSIONS_DIR,
+)
 
 HOME = pathlib.Path.home()
 LAB = DATA_DIR
 INDEX = LAB / "index"
 VEC = INDEX / "vectors.npy"
 DB = INDEX / "meta.db"
+
+# 各 agent 的历史位置。都放在模块级，方便按 agent 覆盖，也便于测试隔离。
 SESSIONS = SESSIONS_DIR
+DSH_SESSIONS = DSH_SESSIONS_DIR
+CODEX_SESSIONS = CODEX_SESSIONS_DIR
+OPENCODE_PATH = OPENCODE_DB
+
+SESSION_ROOTS = {
+    "pi": lambda: SESSIONS,
+    "dsh": lambda: DSH_SESSIONS,
+    "codex": lambda: CODEX_SESSIONS,
+    "opencode": lambda: OPENCODE_PATH,
+}
 
 DIM = 512
 MIN_CHARS = 8
@@ -303,28 +324,59 @@ def iter_file_chunks(path: pathlib.Path, chunk_lines=60, overlap=10):
 
 
 # ── 索引 ──────────────────────────────────────────────────────
+#: 兼容旧名字：Pi 的读取器以前叫 iter_session_chunks，定义在本模块里。
+iter_session_chunks = iter_pi_file
+
+
+def session_root(name: str) -> pathlib.Path:
+    """某个 agent 的历史位置。
+
+    走模块级的 ``SESSION_ROOTS``（而不是 sources 里那份常量），这样覆盖
+    ``e.SESSIONS`` 之类的老做法和测试隔离都继续生效。
+    """
+    return SESSION_ROOTS[name]()
+
+
+def _skip_note(stats: dict) -> str:
+    """把读取器回报的跳过量整理成一行提示。"""
+    bits = []
+    if stats.get("skipped_large_lines"):
+        bits.append(
+            f"{stats['skipped_large_lines']} 行超长数据（>{sources.MAX_LINE_BYTES // 1024}KB）"
+        )
+    if stats.get("skipped_bad_lines"):
+        bits.append(f"{stats['skipped_bad_lines']} 行坏 JSON")
+    return "，跳过 " + "、".join(bits) if bits else ""
+
+
+def migrate_legacy_sessions(con, corpora: set[str]) -> None:
+    """把老版本堆在裸 ``sessions`` 语料里的 Pi 会话改名成 ``sessions:pi``。
+
+    老版本只有一个 ``sessions`` 语料，现在是一个 agent 一个。就地改名而不是重索引，
+    既有索引不必重跑；只有本次确实要索引 Pi 时才动它。
+    """
+    if "sessions:pi" not in corpora:
+        return
+    moved = con.execute(
+        "UPDATE chunks SET corpus=? WHERE corpus=?", ("sessions:pi", "sessions")
+    ).rowcount
+    if moved:
+        globals()["_INDEX_DIRTY"] = True
+        print(f"  已把 {moved} 条旧的 sessions 记录迁移为 sessions:pi")
+
+
 @locked(exclusive=True)
 @transactional
 def cmd_index(a):
     con = db_connect()
     items: list[tuple[str, str, str, str, str]] = []  # corpus, source, ts, role, text
+    corpora: set[str] = set()
     t0 = time.perf_counter()
-    directory = pathlib.Path(a.path).expanduser().resolve() if a.what == "dir" else None
-    corpus_name = (
-        "sessions"
-        if directory is None
-        else (f"dir:{directory.name}:" + hashlib.sha256(str(directory).encode()).hexdigest()[:12])
-    )
 
-    if a.what == "sessions":
-        files = sorted(SESSIONS.rglob("*.jsonl"))
-        print(f"会话文件 {len(files)} 个（{sum(f.stat().st_size for f in files) / 1e6:.0f} MB）")
-        # 注意：不再按文件跳过。会话 jsonl 是持续追加的，文件级跳过会永久丢掉尾巴。
-        for f in files:
-            for role, ts, text in iter_session_chunks(f):
-                items.append(("sessions", f.relative_to(SESSIONS).as_posix(), ts, role, text))
-    elif a.what == "dir":
+    if a.what == "dir":
         root = pathlib.Path(a.path).expanduser().resolve()
+        corpus_name = f"dir:{root.name}:" + hashlib.sha256(str(root).encode()).hexdigest()[:12]
+        corpora.add(corpus_name)
         exts = tuple(e.strip() for e in a.ext.split(",") if e.strip())
         skip_dirs = set(EXCLUDE_DIRS)
         if not a.include_vendor:
@@ -347,12 +399,45 @@ def cmd_index(a):
         for f in files:
             for role, ts, text in iter_file_chunks(f):
                 items.append((corpus_name, str(f), ts, role, text))
+    elif a.what == "sessions" or a.what in sources.AGENTS:
+        # 每个 agent 一个独立语料（sessions:pi / sessions:dsh / ...），互不干扰；
+        # `--chat` 用的是 `sessions%` 前缀，所以四个语料都能一起检索。
+        names = list(sources.AGENTS) if a.what == "sessions" else [a.what]
+        long_records = 0
+        for name in names:
+            root = session_root(name)
+            if not root.exists():
+                print(f"  {name}（{sources.LABELS[name]}）: 未找到 {root}，跳过")
+                continue
+            corpus = f"sessions:{name}"
+            corpora.add(corpus)
+            count = 0
+            stats: dict[str, int] = {}
+            try:
+                for source, ts, role, text in sources.iter_records(name, root, stats):
+                    if len(text) > sources.MAX_RECORD_CHARS:
+                        long_records += 1
+                        continue
+                    items.append((corpus, source, ts, role, text))
+                    count += 1
+            except (RuntimeError, sqlite3.Error) as error:
+                # 例如没装 zstd，或者 opencode 的库正在被写。跳过这个 agent，
+                # 不能因为它把其它 agent 的索引一起弄失败。
+                print(f"  {name}（{sources.LABELS[name]}）: {error}，跳过")
+                continue
+            print(f"  {name}（{sources.LABELS[name]}）: {count} 条记录{_skip_note(stats)}")
+        if long_records:
+            print(f"  跳过 {long_records} 条超长记录（>{sources.MAX_RECORD_CHARS} 字符）")
     else:
         sys.exit(f"未知语料: {a.what}")
 
+    migrate_legacy_sessions(con, corpora)
+
     if a.force:
-        n = purge_corpus(con, corpus_name)
-        print(f"--force：已清除语料 {corpus_name} 的 {n} 条旧记录，重新索引")
+        for corpus in sorted(corpora):
+            n = purge_corpus(con, corpus)
+            if n:
+                print(f"--force：已清除语料 {corpus} 的 {n} 条旧记录，重新索引")
 
     # 去重必须按 (corpus, parent) 作用域：parent 键不含 corpus，全局去重会让
     # 「先索引整个项目、再单独索引其中的子目录」这类重叠语料被整段吞掉——
@@ -382,10 +467,13 @@ def store_items(con, items, device, batch):
     emb = resolve_embedder(device, batch=batch, verbose=True)
     guard_identity(con, emb, stamp=True)
     next_id = con.execute("SELECT COALESCE(MAX(id),0) FROM chunks").fetchone()[0]
-    vector_groups = []
+    # 预分配整块向量矩阵：历史语料动辄几万个窗口，先存 list 再 vstack 会同时
+    # 驻留两份（几万个 × 512 × 4 字节）。
+    matrix = np.empty((len(items), DIM), dtype=np.float32)
     for offset in range(0, len(items), 256):
         group = items[offset : offset + 256]
         vectors = emb.encode([it[4] for it in group])
+        matrix[offset : offset + len(group)] = vectors
         rows = []
         for j, (c, source, ts, role, text, parent, start, end) in enumerate(group):
             key = hashlib.sha1(f"{parent}\0{start}\0{end}\0{text}".encode()).hexdigest()[:24]
@@ -397,12 +485,11 @@ def store_items(con, items, device, batch):
         con.executemany(
             "INSERT INTO chunks_fts(rowid,text) VALUES(?,?)", [(r[0], fts_text(r[5])) for r in rows]
         )
-        vector_groups.append(vectors)
         con.commit()
         next_id += len(rows)
         print(f"  已索引 {min(offset + 256, len(items))}/{len(items)}", flush=True)
-    if vector_groups:
-        append_vectors(np.vstack(vector_groups))
+    if len(items):
+        append_vectors(matrix)
 
 
 @locked(exclusive=True)
@@ -724,7 +811,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("index")
-    p.add_argument("what", choices=["sessions", "dir"])
+    p.add_argument("what", choices=["sessions", "dir", *sources.AGENTS])
     p.add_argument("path", nargs="?", default=".")
     p.add_argument(
         "--ext",

@@ -56,8 +56,9 @@ Model weights are downloaded/imported into your state directory, not bundled wit
 ## Index and retrieve
 
 ```bash
-# Explicitly index Pi history, or a text directory.
-recall index sessions
+# Explicitly index agent history, or a text directory.
+recall index sessions                  # every agent it can find
+recall index codex                     # or just one: pi | dsh | codex | opencode
 recall index dir ./my-project --ext .py,.md,.ts
 
 recall "How did we configure the touch gestures?" --chat --json
@@ -68,7 +69,20 @@ recall read STABLE_ID --neighbors 2 --json
 recall stats
 ```
 
-`--code` searches all indexed `dir:` corpora. The explicit search command supports `--corpus sessions` or `--corpus dir:my-project`. Only indexed Pi history and selected text files are searchable; other agent histories are not automatically ingested.
+`--code` searches all indexed `dir:` corpora, `--chat` searches every agent's history. The explicit search command takes `--corpus sessions:dsh` or `--corpus dir:my-project`.
+
+### Agent history
+
+`recall index sessions` reads the history of four agents, each into its own corpus (`sessions:pi`, `sessions:dsh`, …); path overrides are environment variables:
+
+| agent | location | format | override |
+| --- | --- | --- | --- |
+| Pi | `~/.pi/agent/sessions` | plain JSONL | `RECALL_SESSIONS_DIR` |
+| DeepSeek Harness | `~/.dsh/sessions` | zstd JSONL event stream | `RECALL_DSH_SESSIONS_DIR` |
+| Codex CLI | `~/.codex/sessions` | plain JSONL | `RECALL_CODEX_SESSIONS_DIR` |
+| opencode | `~/.local/share/opencode/opencode.db` | SQLite | `RECALL_OPENCODE_DB` |
+
+Only **conversation text** (user/assistant messages) is indexed — tool calls and tool outputs carry little retrieval value relative to their size, so they are skipped. Records longer than 200,000 characters are skipped, and JSONL lines larger than 1 MiB are dropped before parsing; both counts are reported. That keeps reading bounded: it used to peak at 2 GB (a single Codex session is 986 MB), and now peaks near 100 MB — a full run of 21k records → 60k windows peaks around 670 MB. See [docs/agent-history.md](docs/agent-history.md) for the per-agent event mapping and the measurements behind those limits.
 
 - Long records use 448-token windows with 64-token overlap.
 - Hybrid retrieval reserves candidates for strong keyword matches, retaining hits that pure rank fusion could bury.

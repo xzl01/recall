@@ -55,6 +55,11 @@ def test_nested_session_sources_remain_distinct(tmp_path):
         e.DB = e.INDEX / "meta.db"
         e.VEC = e.INDEX / "vectors.npy"
         e.SESSIONS = tmp_path / "sessions"
+        # `index sessions` 会遍历所有 agent；其余三个指向不存在的位置，
+        # 否则测试会去索引真实的 Codex/opencode 历史。
+        e.DSH_SESSIONS = tmp_path / "dsh"
+        e.CODEX_SESSIONS = tmp_path / "codex"
+        e.OPENCODE_PATH = tmp_path / "opencode.db"
         for name in ["a", "b"]:
             p = e.SESSIONS / name / "same.jsonl"
             p.parent.mkdir(parents=True)

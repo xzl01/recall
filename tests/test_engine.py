@@ -174,6 +174,11 @@ class RecallTests(unittest.TestCase):
         e.VEC = e.INDEX / "vectors.npy"
         e.SESSIONS = self.root / "sessions"
         e.SESSIONS.mkdir()
+        # `index sessions` 会遍历所有 agent；其余三个指向不存在的位置，避免测试
+        # 去索引真实的 Codex/opencode/DSH 历史（那会非常慢，还会读用户数据）。
+        e.DSH_SESSIONS = self.root / "dsh"
+        e.CODEX_SESSIONS = self.root / "codex"
+        e.OPENCODE_PATH = self.root / "opencode.db"
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -597,7 +602,7 @@ class RecallTests(unittest.TestCase):
                     ("Concurrent history entry for Amber updates. " * 400), ts="2026-01-01T00:00:01"
                 )
             )
-        script = "import sys,pathlib,types;sys.path.insert(0,sys.argv[1]);from recall import engine as e;from helpers import install_fake;install_fake();r=pathlib.Path(sys.argv[2]);e.INDEX=r/'index';e.DB=e.INDEX/'meta.db';e.VEC=e.INDEX/'vectors.npy';e.SESSIONS=r/'sessions';"
+        script = "import sys,pathlib,types;sys.path.insert(0,sys.argv[1]);from recall import engine as e;from helpers import install_fake;install_fake();r=pathlib.Path(sys.argv[2]);e.INDEX=r/'index';e.DB=e.INDEX/'meta.db';e.VEC=e.INDEX/'vectors.npy';e.SESSIONS=r/'sessions';e.DSH_SESSIONS=r/'dsh';e.CODEX_SESSIONS=r/'codex';e.OPENCODE_PATH=r/'opencode.db';"
         writer = subprocess.Popen(
             [
                 sys.executable,
