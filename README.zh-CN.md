@@ -6,15 +6,21 @@
 
 ## 安装
 
-真实模型推理已在 Linux x86_64/OpenVINO CPU、GPU 上验证；NPU 依赖相应驱动与编译器。macOS 验证合成数据单元测试，未宣称验证模型推理。当前不支持 Windows。
+一套代码、两套嵌入引擎，按平台自动挑：**Apple Silicon 用 MLX（Metal），Intel / Linux 用 OpenVINO**。
+两者加载同一份 `BAAI/bge-small-zh-v1.5`，池化、维度、中文查询前缀都一致，索引可互换。
+详见[后端说明](docs/backends.md)。
+
+真实模型推理已在 Linux x86_64/OpenVINO CPU、GPU 上验证（NPU 依赖相应驱动与编译器），
+以及 Apple Silicon/MLX 上对照 `transformers` 参考实现验证（最大绝对误差 8.0e-07）。
+当前不支持 Windows。
 
 ```bash
 git clone https://github.com/xzl01/recall.git
 cd recall
 python3 -m venv .venv
 . .venv/bin/activate
-pip install '.[setup]'
-recall setup
+pip install -e '.[mlx]'        # Apple Silicon；Intel / Linux 用 '.[openvino]'
+recall setup                   # 按平台默认装模型；--mlx / --openvino 可强制
 
 recall index sessions
 recall index dir ./my-project --ext .py,.md,.ts

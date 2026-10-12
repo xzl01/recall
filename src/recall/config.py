@@ -13,6 +13,12 @@ MODEL_DIR = (
     .expanduser()
     .resolve()
 )
+# MLX 后端用的模型目录。和 OpenVINO 的 IR 目录分开，权重是同一份 BGE。
+MLX_MODEL_DIR = (
+    Path(os.environ.get("RECALL_MLX_MODEL_DIR", str(DATA_DIR / "models/bge-small-zh-v1.5-mlx")))
+    .expanduser()
+    .resolve()
+)
 SESSIONS_DIR = (
     Path(os.environ.get("RECALL_SESSIONS_DIR", str(Path.home() / ".pi/agent/sessions")))
     .expanduser()
@@ -22,3 +28,5 @@ SOCKET_PATH = (
     Path(os.environ.get("RECALL_SOCKET", str(DATA_DIR / "embed.sock"))).expanduser().resolve()
 )
 DEFAULT_DEVICE = os.environ.get("RECALL_DEVICE", "CPU")
+# auto（默认：优先 OpenVINO，缺失则回退 MLX）/ openvino / mlx
+BACKEND = os.environ.get("RECALL_BACKEND", "auto")

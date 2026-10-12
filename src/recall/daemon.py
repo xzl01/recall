@@ -16,8 +16,56 @@ import sys
 import threading
 import time
 
-from .embedding import BUCKETS, MAX_LEN, Embedder
-from .config import SOCKET_PATH, MODEL_DIR, DEFAULT_DEVICE
+from .embedding import BUCKETS, MAX_LEN
+from .backend import active_backend, candidate_model_dirs, configured_backend, embedder_class
+from .backend import model_dir_for, platform_default
+from .config import SOCKET_PATH, DEFAULT_DEVICE
+
+# 后端在导入时解析一次，落到模块级名字上：
+#   BACKEND_NAME —— 本进程实际在跑（或配置上指向）的后端，只作元数据上报
+#   MODEL_DIR    —— 当前后端实际用的模型目录（上游测试会 monkeypatch 它）
+#   Embedder     —— 当前后端的嵌入器类（同样会被 monkeypatch）
+# 三者接口一致（encode / encode_query / _get_compiled / model_dir），
+# 因此下面所有代码都不需要知道跑的是 OpenVINO 还是 MLX。
+#
+# 解析失败（两个后端的依赖都没装）不在这里抛出：那样连 recall stats / --help 都会
+# 挂掉，而上游只有真正做嵌入时才要求后端。这里退化成占位类，构造时才报错。
+try:
+    BACKEND_NAME = active_backend()
+    Embedder = embedder_class(BACKEND_NAME)
+except (RuntimeError, ValueError) as error:
+    # 注意：`except ... as name` 的名字在块结束时会被删除（PEP 3110），
+    # 所以这里另存一份，供下面的占位类延迟到构造时才抛出。
+    _BACKEND_ERROR = str(error)
+    try:
+        BACKEND_NAME = configured_backend()
+    except ValueError:
+        BACKEND_NAME = platform_default()
+
+    class Embedder:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(_BACKEND_ERROR) from None
+
+
+MODEL_DIR = model_dir_for(BACKEND_NAME)
+
+
+def expected_model_dirs() -> tuple[pathlib.Path, ...]:
+    """客户端愿意复用的常驻服务模型目录。
+
+    包含模块级 ``MODEL_DIR``（测试会替换它），加上当前配置的候选目录。``auto`` 模式
+    下候选目录覆盖两个后端，所以只装 numpy + tokenizers 的客户端也能复用另一套
+    环境跑起来的常驻服务。
+    """
+    seen: set[pathlib.Path] = set()
+    out: list[pathlib.Path] = []
+    for directory in (MODEL_DIR, *candidate_model_dirs()):
+        resolved = pathlib.Path(directory).resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            out.append(resolved)
+    return tuple(out)
+
 
 DIM = 512
 IDLE_EXIT_DEFAULT = 1800.0
@@ -81,6 +129,26 @@ def run_server(sock_path: str, device: str, idle_exit: float, batch: int) -> Non
                     raise RuntimeError(f"Socket is in use: {path}")
             path.unlink(missing_ok=True)
         return _run_server(sock_path, device, idle_exit, batch)
+
+
+def whoami_payload(device: str, embedder) -> dict:
+    """常驻实例的自述信息。
+
+    这里只上报**已经解析好的** ``BACKEND_NAME``，不再调用 ``active_backend()``：
+    后者会重新检查本地有没有装推理框架，而 whoami 是给客户端做兼容性判断用的，
+    不能被「当前进程恰好没装运行时」拖垮（CI 只装 ``.[dev]``，正是这种情况）。
+    """
+    return {
+        "ok": True,
+        "device": device,
+        "backend": BACKEND_NAME,
+        "devices": list(parse_devices(device)),
+        "buckets": list(BUCKETS),
+        "max_len": MAX_LEN,
+        "dim": DIM,
+        "pid": os.getpid(),
+        "model_dir": str(embedder.model_dir.resolve()),
+    }
 
 
 def _run_server(sock_path: str, device: str, idle_exit: float, batch: int) -> None:
@@ -161,16 +229,7 @@ def _run_server(sock_path: str, device: str, idle_exit: float, batch: int) -> No
                             if cmd == "ping":
                                 payload = {"ok": True}
                             elif cmd == "whoami":
-                                payload = {
-                                    "ok": True,
-                                    "device": device,
-                                    "devices": list(parse_devices(device)),
-                                    "buckets": list(BUCKETS),
-                                    "max_len": MAX_LEN,
-                                    "dim": DIM,
-                                    "pid": os.getpid(),
-                                    "model_dir": str(emb.model_dir.resolve()),
-                                }
+                                payload = whoami_payload(device, emb)
                             elif cmd == "shutdown":
                                 payload = {"ok": True}
                                 stop.set()
@@ -259,10 +318,19 @@ class EmbClient:
         return tuple(self.info.get("devices", ())) if self.info else ()
 
     def supports(self, device: str) -> bool:
-        """客户端请求的设备是否就是这个常驻实例实际用的设备。"""
-        return device.strip().upper() in self.devices and self.info.get("model_dir") == str(
-            MODEL_DIR.resolve()
-        )
+        """客户端请求的设备与模型是否就是这个常驻实例实际在用的。
+
+        只比较设备与模型目录，**不检查本地有没有装推理框架**：把嵌入交给常驻服务
+        的轻量客户端（只装 numpy + tokenizers）不该被迫安装 MLX/OpenVINO。两个后端
+        的模型目录本来就不同，已经足以区分后端。
+        """
+        if device.strip().upper() not in self.devices:
+            return False
+        reported = self.info.get("model_dir")
+        if not reported:
+            return False
+        reported_path = pathlib.Path(reported).resolve()
+        return any(reported_path == directory for directory in expected_model_dirs())
 
     def encode(self, texts, is_query: bool = False):
         """返回 (n, 512) float32 归一化向量。"""
@@ -300,6 +368,9 @@ class RemoteEmbedder:
         self.client = client
         self.device = device
         self.batch = batch
+        # 暴露**服务端**实际使用的模型目录，供 engine 校验索引记录的身份。
+        info = client.info or {}
+        self.model_dir = pathlib.Path(info["model_dir"]) if info.get("model_dir") else None
 
     def encode(self, texts, is_query=False, normalize=True):
         return self.client.encode(texts, is_query=is_query)

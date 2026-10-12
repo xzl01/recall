@@ -14,10 +14,29 @@ STOP = set(
 STOP.update(["什么", "怎么", "如何", "这个", "那个", "之前", "上次", "为什么"])
 
 
+def _tokenizer_path():
+    """分块用的 tokenizer 必须和当前嵌入后端是同一份。
+
+    OpenVINO 后端把它放在 MODEL_DIR，MLX 后端放在 MLX_MODEL_DIR；两个目录里的
+    tokenizer.json 本来就是同一个 BGE tokenizer。
+
+    这里只用**配置**挑候选目录，不检查本地有没有装推理框架：把嵌入交给常驻服务
+    的轻量客户端（只装 numpy + tokenizers）不该因为缺 MLX/OpenVINO 就没法分块。
+    """
+    from .backend import candidate_model_dirs
+
+    for directory in (*candidate_model_dirs(), MODEL_DIR):
+        if (directory / "tokenizer.json").is_file():
+            return directory / "tokenizer.json"
+    raise RuntimeError(
+        "找不到 tokenizer.json：请先运行 recall setup（OpenVINO）或 recall setup --mlx。"
+    )
+
+
 def tokenizer():
     global _tokenizer
     if _tokenizer is None:
-        _tokenizer = Tokenizer.from_file(str(MODEL_DIR / "tokenizer.json"))
+        _tokenizer = Tokenizer.from_file(str(_tokenizer_path()))
         _tokenizer.no_truncation()
     return _tokenizer
 

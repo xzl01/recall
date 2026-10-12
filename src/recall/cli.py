@@ -9,7 +9,7 @@ from . import __version__
 HELP = """recall — local agent history and code retrieval
 
 Usage:
-  recall setup [--from EXISTING_MODEL_DIR]
+  recall setup [--from EXISTING_MODEL_DIR] [--mlx|--openvino]
   recall index sessions [--force]
   recall index dir PATH [--ext .py,.md]
   recall search "query" [--json] [-k 6] [--neighbors 1]
@@ -26,6 +26,16 @@ Global options (also accepted after a command):
   --device CPU|GPU|NPU  OpenVINO device (RECALL_DEVICE, default CPU)
   --batch N             Embedding batch size (default 8)
   --version
+
+Backends (one project, two engines — picked by platform):
+  Apple Silicon (darwin/arm64)   MLX       pip install '.[mlx]'
+  Intel / Linux / other          OpenVINO  pip install '.[openvino]'
+  RECALL_BACKEND        auto (default) | openvino | mlx. `auto` takes the
+                        platform default and falls back if its deps are absent.
+  RECALL_MLX_MODEL_DIR  MLX safetensors directory
+                        (default $RECALL_HOME/models/bge-small-zh-v1.5-mlx).
+  `recall setup` installs the model for the platform's default backend;
+  use --mlx / --openvino to force the other one.
 
 Original flags remain available: --status, --index, --read ID,
 --semantic, --neighbors, --chars, --full, --chat and --code.

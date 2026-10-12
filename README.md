@@ -4,11 +4,32 @@ Local retrieval for an agent's history and source code. Recall indexes Pi JSONL 
 
 **Retrieval runs locally.** No LLM provider or API key is needed. Model setup downloads public weights when you request it. Your index stays outside the repository.
 
-[中文说明](README.zh-CN.md) · [Agent skill](skills/recall/SKILL.md) · [Architecture](docs/architecture.md) · [Evaluation](docs/evaluation.md)
+[中文说明](README.zh-CN.md) · [Agent skill](skills/recall/SKILL.md) · [Architecture](docs/architecture.md) · [Evaluation](docs/evaluation.md) · [Backends](docs/backends.md)
 
 ## Install
 
-Python 3.10+ on Linux/POSIX. Real CPU/GPU inference is tested on Linux x86_64 with OpenVINO; GPU/NPU availability depends on hardware and drivers. Portable unit tests also run on macOS, which is not a claim of verified model inference there. Windows is currently unsupported because indexing uses POSIX locks and the daemon uses Unix sockets.
+Python 3.10+ on Linux/POSIX. Windows is currently unsupported because indexing uses POSIX locks and the daemon uses Unix sockets.
+
+### Backends: one project, two embedding engines
+
+The retrieval pipeline is engine-agnostic; the embedding layer has two interchangeable implementations, picked by platform:
+
+| Platform | Default backend | Install |
+| --- | --- | --- |
+| Apple Silicon (darwin / arm64) | **MLX** (Metal) | `pip install '.[mlx]'` |
+| Linux, Intel macOS, other | **OpenVINO** | `pip install '.[openvino]'` |
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e '.[mlx]'      # or '.[openvino]'
+.venv/bin/recall setup                  # installs the model for your platform's backend
+```
+
+`recall setup` follows the platform default; pass `--mlx` or `--openvino` to force the other one. `RECALL_BACKEND=auto` (the default) takes the platform default and falls back to the other engine if its dependency is missing, so Linux behaviour is unchanged. An explicit `RECALL_BACKEND=openvino|mlx` never falls back — it errors instead of silently switching.
+
+Both engines load the **same** `BAAI/bge-small-zh-v1.5` weights and keep the same semantics: CLS pooling, L2 normalisation, 512 dimensions, and the same Chinese query prefix. `vectors.npy` is therefore identical in shape and meaning across backends, and existing indexes stay valid.
+
+Measured on one Apple Silicon machine against a `transformers` reference on the same `model.safetensors`: MLX differs by 8.0e-07, while OpenVINO differs by 1.4e-03 (its own graph-optimisation numerics, long-standing upstream behaviour — not introduced here). The practical effect is nil: over a 6-document corpus and 5 mixed-language queries the two backends produced **identical top-k rankings**, with scores differing in the fourth decimal. See [docs/backends.md](docs/backends.md) for the numbers and caveats.
 
 ```bash
 git clone https://github.com/xzl01/recall.git

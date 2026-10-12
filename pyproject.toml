@@ -15,11 +15,16 @@ dependencies = ["numpy>=1.24,<3", "tokenizers>=0.20,<1"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
   "Topic :: Text Processing :: Indexing",
 ]
 
 [project.optional-dependencies]
+# 两套推理后端，按平台选：Apple Silicon 用 MLX，其余（Intel / Linux）用 OpenVINO。
+# RECALL_BACKEND=auto（默认）会挑当前平台该用的那个。
+mlx = ["mlx>=0.14,<1", "safetensors>=0.4,<1"]
 openvino = ["openvino>=2024.4,<2027"]
+# 只用于 OpenVINO 那条路：把 BGE 导出成 IR（需要 torch 与 optimum-intel）。
 setup = ["openvino>=2024.4,<2027", "optimum-intel>=2.2,<3", "transformers>=4.44,<5", "torch>=2,<3", "huggingface-hub>=0.26,<1"]
 dev = ["pytest>=8,<10", "build>=1,<2", "ruff>=0.12,<1"]
 
