@@ -60,6 +60,10 @@ def main():
             "RECALL_BACKEND": "gguf",
             "RECALL_GGUF_MODEL_DIR": str(home / "models/bge-small-zh-v1.5-gguf"),
             "RECALL_DEVICE": a.device,
+            # 同上：把其余 agent 指到不存在的位置，别去索引真实历史。
+            "RECALL_DSH_SESSIONS_DIR": str(root / "dsh"),
+            "RECALL_CODEX_SESSIONS_DIR": str(root / "codex"),
+            "RECALL_OPENCODE_DB": str(root / "opencode.db"),
         }
         base = [
             sys.executable,

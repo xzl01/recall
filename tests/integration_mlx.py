@@ -51,6 +51,12 @@ def main():
             "RECALL_HOME": str(home),
             "RECALL_BACKEND": "mlx",
             "RECALL_DEVICE": a.device,
+            # `index sessions` 会遍历所有 agent：其余三个必须指到不存在的位置，
+            # 否则这个测试会跑去找**真实的** Codex/opencode/DSH 历史来索引
+            # （既慢又读了用户的私有数据）。
+            "RECALL_DSH_SESSIONS_DIR": str(root / "dsh"),
+            "RECALL_CODEX_SESSIONS_DIR": str(root / "codex"),
+            "RECALL_OPENCODE_DB": str(root / "opencode.db"),
         }
         base = [
             sys.executable,
