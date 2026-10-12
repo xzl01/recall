@@ -118,7 +118,7 @@ The socket accepts only local clients and has mode 0600. The client verifies the
 
 ## Agent skill
 
-Copy `skills/recall/` to the skill directory of your harness, such as `~/.agents/skills/recall/`. The skill guides retrieval and evidence checking; it does not install the executable or silently ingest history.
+Copy `skills/recall/` to the skill directory of your harness, such as `~/.agents/skills/recall/`. `skills/install.sh` does that for the common locations (`~/.agents`, `~/.codex`, `~/.claude`, `~/.workbuddy`, `~/.codebuddy`) — it skips anything that already exists unless you pass `--force`, and `--list` shows the targets without writing. It copies rather than symlinks, because a checkout on a removable volume would leave dangling links; re-run with `--force` after the skill changes. The skill guides retrieval and evidence checking; it does not install the executable or silently ingest history.
 
 ## Develop
 
