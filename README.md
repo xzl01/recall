@@ -28,7 +28,14 @@ python3 -m venv .venv
 
 `recall setup` follows the platform default; pass `--mlx`, `--openvino` or `--gguf` to force one. `RECALL_BACKEND=auto` (the default) takes the platform default and falls back to the other fp32 engine if its dependency is missing. An explicit `RECALL_BACKEND` never falls back — it errors instead of silently switching.
 
-`pip install -e` puts `recall` only inside the environment you installed into. Other tools — and other agents, which see nothing but your `PATH` — will not find it. To run the checkout from anywhere, add a shim to a directory on your `PATH`:
+`pip install -e` puts `recall` only inside the environment you installed into. Other tools — and other agents, which see nothing but your `PATH` — will not find it. `skills/install.sh --shim` generates that shim for you, with the checkout path already filled in:
+
+```bash
+./skills/install.sh --shim              # writes ~/.local/bin/recall (or $RECALL_BIN_DIR)
+./skills/install.sh --shim --bin-dir DIR
+```
+
+Hand-rolled, the shim is:
 
 ```sh
 #!/bin/sh
@@ -36,7 +43,7 @@ python3 -m venv .venv
 exec /path/to/checkout/.venv/bin/recall "$@"
 ```
 
-Make the shim check that the binary exists first. A checkout on a removable volume, or a virtualenv that has not been rebuilt, otherwise fails as a bare `command not found` — which reads as "not installed" rather than "not mounted", and is the harder problem to diagnose.
+Either way, make it check that the binary exists first. A checkout on a removable volume, or a virtualenv that has not been rebuilt, otherwise fails as a bare `command not found` — which reads as "not installed" rather than "not mounted", and is the harder problem to diagnose. The generated shim checks, names the cause, and exits 127.
 
 **GGUF is never selected automatically.** It is usually a *quantised* artifact, so its vectors live in a different space from the fp32 weights — recall therefore binds every index to the model identity it was built from and refuses to search or append with a different one. Switching engines (or quantisation levels) means rebuilding the index. `llama-cpp-python` ships no wheels, so `.[gguf]` compiles on install and needs a C++ toolchain and cmake.
 
@@ -128,7 +135,7 @@ The socket accepts only local clients and has mode 0600. The client verifies the
 
 ## Agent skill
 
-Copy `skills/recall/` to the skill directory of your harness, such as `~/.agents/skills/recall/`. `skills/install.sh` does that for the common locations (`~/.agents`, `~/.codex`, `~/.claude`, `~/.workbuddy`, `~/.codebuddy`) — it skips anything that already exists unless you pass `--force`, and `--list` shows the targets without writing. It copies rather than symlinks, because a checkout on a removable volume would leave dangling links; re-run with `--force` after the skill changes. The skill guides retrieval and evidence checking; it does not install the executable or silently ingest history.
+Copy `skills/recall/` to the skill directory of your harness, such as `~/.agents/skills/recall/`. `skills/install.sh` does that for the common locations (`~/.agents`, `~/.codex`, `~/.claude`, `~/.workbuddy`, `~/.codebuddy`) — it skips anything that already exists unless you pass `--force`, and `--list` shows the targets without writing. `--shim` additionally writes the `PATH` shim described under Install, since a skill that says "run `recall`" is useless if no harness can find the executable. It copies rather than symlinks, because a checkout on a removable volume would leave dangling links; re-run with `--force` after the skill changes. The skill guides retrieval and evidence checking; it does not install the executable or silently ingest history.
 
 ## Develop
 

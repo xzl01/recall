@@ -80,3 +80,8 @@ Configuration comes from `RECALL_HOME`, `RECALL_MODEL_DIR` (or `RECALL_MLX_MODEL
 per-agent source overrides `RECALL_SESSIONS_DIR`, `RECALL_DSH_SESSIONS_DIR`,
 `RECALL_CODEX_SESSIONS_DIR`, `RECALL_OPENCODE_DB`, `RECALL_CODEBUDDY_SESSIONS_DIR` and
 `RECALL_WORKBUDDY_SESSIONS_DIR`. CLI flags override them.
+
+If `recall` is not found at all, that is a setup gap rather than an empty history: the
+executable may live in a checkout's virtualenv instead of on `PATH`. Report it as such —
+do not conclude that nothing was recorded. A forwarding script for `PATH` comes from
+`skills/install.sh --shim` in the same repository.
