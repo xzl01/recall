@@ -1,39 +1,78 @@
 ---
 name: recall
-description: Retrieve indexed local Pi history and text/code sources with recall when past decisions, actions or discussions matter. Use source snippets to establish context; exact file symbols and literal errors can also be located with rg.
+description: Retrieve indexed local agent history (Pi, DeepSeek Harness, Codex, opencode, CodeBuddy, WorkBuddy) and selected text/code directories with recall when past decisions, actions or discussions matter. Snippets are original material, not verified conclusions; use rg for exact symbols.
 ---
 
 # recall
 
-Use the installed `recall` executable. This is retrieval of original material, not a verified conclusion store. If a separate reviewed memory store exists, consult it first when appropriate.
+Use the installed `recall` executable to retrieve original material: a decision already
+made, an error already diagnosed, a configuration already settled. It is a retrieval
+index, not a verified conclusion store. If a separate reviewed memory store exists,
+consult it first when appropriate.
 
-## Source coverage
+## What is searchable
 
-Only indexed Pi JSONL sessions and explicitly selected text directories are included. Sharing the executable with another harness does not automatically index that harness's history. Missing snippets do not prove an action never happened. Model installation and indexing are separate from installing this skill.
+Indexing is explicit. Nothing is indexed merely because the executable is shared with a
+harness.
+
+- `sessions:*` — one corpus per agent: `pi`, `dsh`, `codex`, `opencode`, `codebuddy`,
+  `workbuddy`. Only conversation text (user/assistant) is indexed, never tool calls or
+  tool outputs, and not every record survives the size caps.
+- `dir:*` — text directories added with `recall index dir PATH`.
+
+A missing snippet does not prove something never happened: that agent may not be indexed,
+or the record may have been skipped for size. Note that the CodeBuddy **IDE** keeps
+conversations server-side, so `sessions:codebuddy` stays empty on an IDE-only install.
 
 ```bash
-recall --chat --json "previous decision about gesture configuration"
-recall --code --json --full "identifier and error message"
-recall search "query" --corpus sessions -k 10 --json
-recall --read STABLE_ID --neighbors 3 --json
-recall --semantic --neighbors 0 --json "natural-language description"
-recall --status
+recall "natural-language description" --chat --json        # all agent histories
+recall "identifier or error text" --code --json --full     # indexed text directories
+recall search "query" --corpus sessions:codex -k 10 --json
+recall search "query" --corpus sessions -k 10 --json       # prefix: every agent
+recall read STABLE_ID --neighbors 3 --json
+recall search "query" --mode semantic --neighbors 0 --json
+recall stats
 ```
 
-Natural-language descriptions help semantic retrieval; names, identifiers and literal errors help keyword retrieval. Precise function/file searches may be better served by `rg`.
+Natural-language descriptions suit the semantic half of hybrid retrieval; names,
+identifiers and literal error strings suit the keyword half. For exact symbols or paths,
+`rg` is usually the better tool.
 
-## Evidence and context
+## Evidence
 
-- `id` is a stable window key for reading; numeric row IDs can change after rebuilds.
-- `score` is cosine similarity, `rank_score` is rank fusion, and neither is a confidence probability. `semantic_rank`, `lexical_rank`, `matched_terms`, `selection_reason` and `fusion_rank` explain candidate selection.
-- `parent/offset_start/offset_end` identify the anchor window. `context_records` identifies each added window's record, time, role and position; do not attribute all neighboring content to the anchor's author or time.
-- `truncated/text_chars` indicate character clipping. Search adds one neighboring window per side by default, staying within the same source. `--neighbors 0` returns the raw hit. `--full` removes the character budget.
-- `--read` returns neighboring windows from the same original record (two per side by default), not an entire session or file.
+- `id` is a stable window key for reading; numeric `chunk_id` changes on rebuild.
+- `score` is cosine similarity and `rank_score` is rank fusion. Neither is a confidence
+  probability. `semantic_rank`, `lexical_rank`, `matched_terms`, `selection_reason` and
+  `fusion_rank` explain why a candidate was selected.
+- `parent` identifies the original record. `context_records` reports each neighbouring
+  window's record, time, role and position — do not attribute all neighbouring text to
+  the anchor's author or timestamp.
+- `truncated` / `text_chars` report clipping. Search adds one neighbouring window per
+  side within the same record; `--neighbors 0` returns the raw hit; `--full` lifts the
+  character budget.
+- `recall read` returns neighbouring windows from the same original record, not an
+  entire session or file.
 
-Read more context or revise the query when evidence is incomplete. Check dates, roles and source versions when facts conflict; current code and reviewed conclusions may supersede old snippets. Do not treat a model-generated summary as original evidence. Avoid reusing a universal similarity cutoff across languages or splitting schemes.
+Read more context or rephrase when evidence is incomplete. Check dates, roles and source
+versions when facts conflict: current code and reviewed conclusions may supersede old
+snippets. Do not present a model-generated summary as original evidence. Avoid carrying
+one similarity cutoff across languages or chunking schemes.
 
 ## Operation
 
-Daily indexing/search is local and needs no answering-model credentials. Model setup may download public weights only when invoked. Configuration comes from `RECALL_HOME`, `RECALL_MODEL_DIR`, `RECALL_SESSIONS_DIR`, `RECALL_DEVICE` and `RECALL_SOCKET`, or their CLI overrides.
+Daily indexing and search are local and need no answering-model credentials. Embedding
+weights are a separate install — `recall setup`, or explicitly `--mlx` / `--openvino` /
+`--gguf`; `RECALL_BACKEND` pins one engine. Weights download only when setup is invoked.
 
-Capture stderr and respect nonzero exit codes; errors are not JSON results. Preserve the paired database/vector files. Incremental `recall index sessions` ingests new records; `--force` rebuilds the selected corpus. Publishing indexes requires separate judgment about the actual contents; the source repository contains no real histories.
+`recall index sessions` is incremental and ingests new records; `recall index <agent>`
+does a single source; `--force` rebuilds the selected corpus. Publishing an index is a
+separate judgement about its contents — this repository ships no real histories.
+
+Keep `meta.db` and `vectors.npy` together. Errors go to stderr with a nonzero exit code
+and are not JSON results.
+
+Configuration comes from `RECALL_HOME`, `RECALL_MODEL_DIR` (or `RECALL_MLX_MODEL_DIR` /
+`RECALL_GGUF_MODEL_DIR`), `RECALL_BACKEND`, `RECALL_DEVICE`, `RECALL_SOCKET`, and the
+per-agent source overrides `RECALL_SESSIONS_DIR`, `RECALL_DSH_SESSIONS_DIR`,
+`RECALL_CODEX_SESSIONS_DIR`, `RECALL_OPENCODE_DB`, `RECALL_CODEBUDDY_SESSIONS_DIR` and
+`RECALL_WORKBUDDY_SESSIONS_DIR`. CLI flags override them.
