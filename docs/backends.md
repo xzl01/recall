@@ -283,6 +283,11 @@ GGUF 目录的 `manifest.json` **刻意不写 `source_sha256`**，身份按 `.gg
 
 ## 已知限制
 
+- **MLX 的 Metal 缓冲缓存必须设上限**。默认无上限：连续编码时进程**物理占用**
+  会涨到 4 GB，而 RSS 只有 210 MB —— 从 RSS 完全看不出来，16 GB 的机器上索引到
+  一半就会被内核以 low-swap 杀掉。`MLXEmbedder` 构造时设 256 MB 上限（可用
+  `RECALL_MLX_CACHE_LIMIT_MB` 覆盖），并在每次批量编码（≥64 条）后
+  `clear_cache()`。实测：默认 4.0 GB → 仅设上限 606 MB → 加上定期清理 204 MB。
 - **MLX 后端只支持 BERT 结构**。`mlx_embedding._Bert` 按 `model_type == "bert"` 校验，
   换成别的架构会显式报错，而不是给出错误结果。
 - **MLX 后端下 `--device` 不参与计算**。MLX 固定走 Metal，这个参数只是被原样记录，

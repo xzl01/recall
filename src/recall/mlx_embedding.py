@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import time
 
@@ -26,6 +27,23 @@ from .embedding import QUERY_PREFIX, BUCKETS, MAX_LEN
 
 DIM = 512
 MODEL_FILES = ("config.json", "model.safetensors", "tokenizer.json")
+
+#: MLX 的 Metal 缓冲缓存上限（MB）。
+#:
+#: 这个必须设，不是可选优化：默认缓存**无上限**，连续编码时实测进程物理占用涨到
+#: **4.0 GB**，而 RSS 只有 210 MB —— 从 RSS 完全看不出来。16 GB 的机器上索引历史
+#: 到一半就会被内核杀掉：
+#:
+#:     memorystatus: python3.12 [...] has greater than 50% of compressed memory
+#:     memorystatus: killing python3.12 [...] due to low-swap
+#:
+#: 设成 256 MB 之后同样负载的物理占用约 600 MB；配合批量结束时的 ``clear_cache()``
+#: 能降到 200 MB 量级。
+CACHE_LIMIT_MB = int(os.environ.get("RECALL_MLX_CACHE_LIMIT_MB", "256"))
+
+#: 一次 ``encode`` 处理这么多条以上，结束后就把 Metal 缓冲还回去。
+#: 单条查询走不到这个分支，不受影响。
+CLEAR_CACHE_MIN_TEXTS = 64
 
 # 加性注意力掩码里代表「屏蔽」的大负数。HF 用 float32 最小值，效果等价：
 # softmax 之后两者都精确下溢到 0。
@@ -159,6 +177,21 @@ class MLXEmbedder:
         self.batch = max(1, int(batch))
         self.verbose = verbose
 
+        import mlx.core as mx
+
+        self.mx = mx
+        # 必须限制 Metal 缓冲缓存，否则长任务会把进程物理占用顶到 4 GB（见
+        # CACHE_LIMIT_MB 的说明）。老版本没有 set_cache_limit 就退回 mx.metal。
+        limit = CACHE_LIMIT_MB << 20
+        setter = getattr(mx, "set_cache_limit", None) or getattr(
+            getattr(mx, "metal", None), "set_cache_limit", None
+        )
+        if setter is not None:
+            try:
+                setter(limit)
+            except Exception:
+                pass
+
         from tokenizers import Tokenizer
 
         self.tk = Tokenizer.from_file(str(self.model_dir / "tokenizer.json"))
@@ -211,7 +244,21 @@ class MLXEmbedder:
         if normalize:
             norms = np.linalg.norm(out, axis=1, keepdims=True)
             out = out / np.maximum(norms, 1e-12)
+        if len(texts) >= CLEAR_CACHE_MIN_TEXTS:
+            # 批量（索引）路径：把 Metal 缓冲还给系统。单条查询不走这里，
+            # 免得为了省一点内存反复丢掉刚编译好的 kernel。
+            self._clear_cache()
         return out.astype(np.float32, copy=False)
+
+    def _clear_cache(self) -> None:
+        clear = getattr(self.mx, "clear_cache", None) or getattr(
+            getattr(self.mx, "metal", None), "clear_cache", None
+        )
+        if clear is not None:
+            try:
+                clear()
+            except Exception:
+                pass
 
     def encode_query(self, text, **kw) -> np.ndarray:
         return self.encode(text, is_query=True, **kw)
