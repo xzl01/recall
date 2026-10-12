@@ -14,6 +14,7 @@
 | opencode | `~/.local/share/opencode/opencode.db` | SQLite | `part` 表中 `type=text` 的条目 |
 | codebuddy | `~/.codebuddy/projects` | 纯文本 JSONL | `type=message` 的 `role`/`content` |
 | workbuddy | `~/.workbuddy/projects` | 纯文本 JSONL | 同上（两个产品共用一套写入器） |
+| claude | `~/.claude/projects` | 纯文本 JSONL | `type` 是 user/assistant，正文在 `message.content` |
 
 DSH 的会话是 **zstd 压缩**的：Python 3.14+ 自带 ``compression.zstd``，更早的版本需要
 ``pip install '.[dsh]'``（会装 ``zstandard``）。缺这个库时 DSH 会被跳过并给出提示，
@@ -30,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Iterator
 
 from .config import (
+    CLAUDE_SESSIONS_DIR,
     CODEBUDDY_SESSIONS_DIR,
     CODEX_SESSIONS_DIR,
     DSH_SESSIONS_DIR,
@@ -39,7 +41,7 @@ from .config import (
 )
 
 #: 支持的 agent，顺序即 `recall index sessions` 的处理顺序。
-AGENTS = ("pi", "dsh", "codex", "opencode", "codebuddy", "workbuddy")
+AGENTS = ("pi", "dsh", "codex", "opencode", "codebuddy", "workbuddy", "claude")
 
 LABELS = {
     "pi": "Pi",
@@ -48,6 +50,7 @@ LABELS = {
     "opencode": "opencode",
     "codebuddy": "CodeBuddy",
     "workbuddy": "WorkBuddy",
+    "claude": "Claude Code",
 }
 
 #: 单条记录（一次发言）的字符上限。超过就跳过 —— 一次粘贴几 MB 的日志进索引
@@ -81,6 +84,7 @@ def source_path(agent: str) -> pathlib.Path:
         "opencode": OPENCODE_DB,
         "codebuddy": CODEBUDDY_SESSIONS_DIR,
         "workbuddy": WORKBUDDY_SESSIONS_DIR,
+        "claude": CLAUDE_SESSIONS_DIR,
     }[agent]
 
 
@@ -306,6 +310,34 @@ def iter_codebuddy_file(path: pathlib.Path, stats=None) -> Iterator[tuple[str, s
         yield role, _iso_from_ms(record.get("timestamp")), text
 
 
+def iter_claude_file(  # noqa: D401
+    path: pathlib.Path, stats=None
+) -> Iterator[tuple[str, str, str]]:
+    """Claude Code：``type`` 直接是 ``user``/``assistant``，正文在 ``message.content``。
+
+    与 pi 同源（pi 的格式就派生自这套），区别是这里 ``type`` 本身就是角色，而不是
+    ``"message"``，且 ``content`` 可能是纯字符串。
+
+    ``thinking`` / ``tool_use`` / ``tool_result`` 块都跳过 —— 前者的文本在
+    ``thinking`` 字段而不是 ``text``，后两者根本没有 ``text`` 字段，所以
+    :func:`_blocks_to_text` 天然只收到正文。``mode`` / ``permission-mode`` /
+    ``ai-title`` / ``last-prompt`` / ``file-history-snapshot`` 这类行同样跳过。
+
+    ``isSidechain`` 的子代理会话**保留**：它们也是真实对话，来源路径已经能区分。
+    """
+    for record in _lines(path, stats):
+        role = record.get("type")
+        if role not in ("user", "assistant"):
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict):
+            continue
+        text = _blocks_to_text(message.get("content")).strip()
+        if len(text) < MIN_CHARS:
+            continue
+        yield role, (record.get("timestamp") or "")[:19], text
+
+
 def iter_opencode_db(path: pathlib.Path) -> Iterator[tuple[str, str, str]]:
     """opencode：SQLite 里 ``part`` 表中 type=text 的条目，靠 message 拿 role。"""
     uri = f"file:{path}?mode=ro"
@@ -363,6 +395,7 @@ def iter_records(
         # 腾讯这两个产品共用一套写入器，所以是同一个读取器、两个根目录。
         "codebuddy": iter_codebuddy_file,
         "workbuddy": iter_codebuddy_file,
+        "claude": iter_claude_file,
     }
     reader = readers[agent]
     # 只有 opencode 走 SQLite，其余都是文件型读取器，都回报跳过量。

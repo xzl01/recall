@@ -11,7 +11,7 @@ HELP = """recall — local agent history and code retrieval
 Usage:
   recall setup [--from EXISTING_MODEL_DIR] [--mlx|--openvino|--gguf]
   recall index sessions [--force]      every agent below
-  recall index pi|dsh|codex|opencode|codebuddy|workbuddy   just one
+  recall index pi|dsh|codex|opencode|codebuddy|workbuddy|claude   just one
   recall index dir PATH [--ext .py,.md]
   recall search "query" [--json] [-k 6] [--neighbors 1]
   recall "query" [--chat|--code] [--json] [--full]
@@ -27,6 +27,7 @@ Agent history (`sessions` corpus, one per agent: sessions:pi, sessions:dsh, ...)
   opencode   ~/.local/share/opencode/opencode.db  SQLite          RECALL_OPENCODE_DB
   codebuddy  ~/.codebuddy/projects             plain JSONL        RECALL_CODEBUDDY_SESSIONS_DIR
   workbuddy  ~/.workbuddy/projects             plain JSONL        RECALL_WORKBUDDY_SESSIONS_DIR
+  claude     ~/.claude/projects                plain JSONL        RECALL_CLAUDE_SESSIONS_DIR
   Only conversation text is indexed (user/assistant), not tool calls or outputs.
   `--chat` matches all of them (prefix `sessions`). A directory that does not exist
   is reported and skipped, so a machine that never ran an agent needs no setup.

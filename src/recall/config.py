@@ -42,6 +42,12 @@ CODEX_SESSIONS_DIR = (
     .expanduser()
     .resolve()
 )
+# Claude Code 的会话：projects/<编码后的 cwd>/<会话 uuid>.jsonl
+CLAUDE_SESSIONS_DIR = (
+    Path(os.environ.get("RECALL_CLAUDE_SESSIONS_DIR", str(Path.home() / ".claude/projects")))
+    .expanduser()
+    .resolve()
+)
 # opencode 已经迁到 SQLite：旧的 storage/ 目录是空的，历史都在这个库里。
 OPENCODE_DB = (
     Path(

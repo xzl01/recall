@@ -1,6 +1,6 @@
 # recall
 
-给 agent 使用的本地历史与代码检索工具：索引六个 agent 的会话历史（Pi、DeepSeek Harness、Codex、opencode、CodeBuddy、WorkBuddy）和选定文本目录，用 BGE 语义嵌入与 SQLite FTS5 混合检索，返回可追溯原文、稳定 ID 和相邻上下文。
+给 agent 使用的本地历史与代码检索工具：索引七个 agent 的会话历史（Pi、DeepSeek Harness、Codex、opencode、CodeBuddy、WorkBuddy、Claude Code）和选定文本目录，用 BGE 语义嵌入与 SQLite FTS5 混合检索，返回可追溯原文、稳定 ID 和相邻上下文。
 
 检索不需要回答模型或 API key。初次模型安装按指令下载公开权重，日常检索在本地执行。历史索引默认放在 `~/.local/share/recall`，不在代码仓库里。
 
@@ -35,7 +35,7 @@ recall --read STABLE_ID --json
 
 如果已经有 BGE OpenVINO 模型目录（`tokenizer.json` 和 `ov/openvino_model.xml/.bin`），安装 `.[openvino]` 后执行 `recall setup --from /path/to/model`，可复用本地模型。
 
-`recall index sessions` 会索引它能找到的每个 agent 的历史，各自一个语料（`sessions:pi`、`sessions:dsh`、`sessions:codex`、`sessions:opencode`、`sessions:codebuddy`、`sessions:workbuddy`）：
+`recall index sessions` 会索引它能找到的每个 agent 的历史，各自一个语料（`sessions:pi`、`sessions:dsh`、`sessions:codex`、`sessions:opencode`、`sessions:codebuddy`、`sessions:workbuddy`、`sessions:claude`）：
 
 | agent | 位置 | 格式 |
 | --- | --- | --- |
@@ -45,6 +45,7 @@ recall --read STABLE_ID --json
 | opencode | `~/.local/share/opencode/opencode.db` | SQLite |
 | CodeBuddy | `~/.codebuddy/projects` | 纯文本 JSONL |
 | WorkBuddy | `~/.workbuddy/projects` | 纯文本 JSONL |
+| Claude Code | `~/.claude/projects` | 纯文本 JSONL |
 
 目录不存在的来源会打印一行「未找到 …，跳过」，所以没跑过某个 agent 的机器不需要配置。
 `--chat` 搜全部 agent 历史（`sessions` 前缀），`--code` 搜已索引文本目录。也支持

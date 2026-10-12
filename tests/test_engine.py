@@ -181,6 +181,7 @@ class RecallTests(unittest.TestCase):
         e.OPENCODE_PATH = self.root / "opencode.db"
         e.CODEBUDDY_SESSIONS = self.root / "codebuddy"
         e.WORKBUDDY_SESSIONS = self.root / "workbuddy"
+        e.CLAUDE_SESSIONS = self.root / "claude"
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -604,7 +605,7 @@ class RecallTests(unittest.TestCase):
                     ("Concurrent history entry for Amber updates. " * 400), ts="2026-01-01T00:00:01"
                 )
             )
-        script = "import sys,pathlib,types;sys.path.insert(0,sys.argv[1]);from recall import engine as e;from helpers import install_fake;install_fake();r=pathlib.Path(sys.argv[2]);e.INDEX=r/'index';e.DB=e.INDEX/'meta.db';e.VEC=e.INDEX/'vectors.npy';e.SESSIONS=r/'sessions';e.DSH_SESSIONS=r/'dsh';e.CODEX_SESSIONS=r/'codex';e.OPENCODE_PATH=r/'opencode.db';e.CODEBUDDY_SESSIONS=r/'codebuddy';e.WORKBUDDY_SESSIONS=r/'workbuddy';"
+        script = "import sys,pathlib,types;sys.path.insert(0,sys.argv[1]);from recall import engine as e;from helpers import install_fake;install_fake();r=pathlib.Path(sys.argv[2]);e.INDEX=r/'index';e.DB=e.INDEX/'meta.db';e.VEC=e.INDEX/'vectors.npy';e.SESSIONS=r/'sessions';e.DSH_SESSIONS=r/'dsh';e.CODEX_SESSIONS=r/'codex';e.OPENCODE_PATH=r/'opencode.db';e.CODEBUDDY_SESSIONS=r/'codebuddy';e.WORKBUDDY_SESSIONS=r/'workbuddy';e.CLAUDE_SESSIONS=r/'claude';"
         writer = subprocess.Popen(
             [
                 sys.executable,

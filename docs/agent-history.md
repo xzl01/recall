@@ -1,4 +1,4 @@
-# Agent 历史：六个来源
+# Agent 历史：七个来源
 
 `recall index sessions` 会读取它能找到的每个 agent 的历史，各自写进一个独立语料：
 
@@ -10,6 +10,7 @@
 | opencode | `~/.local/share/opencode/opencode.db` | SQLite | `sessions:opencode` | `RECALL_OPENCODE_DB` |
 | CodeBuddy | `~/.codebuddy/projects` | 纯文本 JSONL | `sessions:codebuddy` | `RECALL_CODEBUDDY_SESSIONS_DIR` |
 | WorkBuddy | `~/.workbuddy/projects` | 纯文本 JSONL | `sessions:workbuddy` | `RECALL_WORKBUDDY_SESSIONS_DIR` |
+| Claude Code | `~/.claude/projects` | 纯文本 JSONL | `sessions:claude` | `RECALL_CLAUDE_SESSIONS_DIR` |
 
 ```bash
 recall index sessions          # 全部
@@ -66,6 +67,7 @@ recall search "keepalive" --corpus sessions:codex
 | dsh | 3,959 | 8.8 M字符 | 97 个 zstd 会话 |
 | opencode | 1,812 | 0.8 M字符 | SQLite 里 15,522 个 part，只有 1,932 个是 text |
 | workbuddy | 1,454 | 0.8 M字符 | 18 个会话文件 / 56.5 MB |
+| claude | 385 | 0.21 M字符 | 23 个会话；1872 行里只有 359 行含正文，其余是纯工具调用/结果 |
 | codebuddy | 0 | — | IDE 不落盘，见上文 |
 | pi | 0 | — | 这台机器没装 Pi |
 
@@ -143,6 +145,36 @@ opencode 已经迁到 SQLite：`~/.local/share/opencode/opencode.db`（旧的
 `opencode:lucky-comet`），因为这里没有文件路径。
 
 数据库以**只读**方式打开（`mode=ro`），不会干扰正在运行的 opencode。
+
+### Claude Code
+
+`~/.claude/projects/<编码后的 cwd>/<会话 uuid>.jsonl`，纯 JSONL。和 Pi **同源**（Pi 的格式
+就派生自这套），区别是 `type` 本身直接是角色：
+
+```json
+{"type": "user", "timestamp": "2026-06-17T08:09:19.270Z",
+ "cwd": "...", "isSidechain": false,
+ "message": {"role": "user", "content": [{"type": "text", "text": "..."}]}}
+```
+
+- 取 `type` 为 `user` / `assistant` 的行，正文是 `message.content` 里的块
+- `content` 也可能是**纯字符串**，同样处理
+- 时间戳是带毫秒和 `Z` 的 ISO，截成 19 位，和 codex 一致
+
+各块类型与实际字段（实测，决定哪些会被读到）：
+
+| 块类型 | 键 | 会进索引吗 |
+| --- | --- | --- |
+| `text` | `text` | **会** |
+| `thinking` | `thinking`、`signature` | 不会 —— 文本在 `thinking` 而不是 `text` |
+| `tool_use` | `id`、`name`、`input` | 不会 —— 没有 `text` 字段 |
+| `tool_result` | `content`、`tool_use_id` | 不会 —— 没有 `text` 字段 |
+
+所以 `_blocks_to_text` 只认 `text` 字段这一点，正好把思维链和工具流量都挡在外面，不需要
+逐类型特判。另外 `mode`、`permission-mode`、`ai-title`、`last-prompt`、
+`file-history-snapshot`、`system` 这些非对话行也跳过。
+
+`isSidechain: true` 的子代理会话**保留** —— 它们也是真实对话，来源路径已经能区分。
 
 ### CodeBuddy / WorkBuddy
 

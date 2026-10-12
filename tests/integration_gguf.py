@@ -68,6 +68,7 @@ def main():
             "RECALL_OPENCODE_DB": str(root / "opencode.db"),
             "RECALL_CODEBUDDY_SESSIONS_DIR": str(root / "codebuddy"),
             "RECALL_WORKBUDDY_SESSIONS_DIR": str(root / "workbuddy"),
+            "RECALL_CLAUDE_SESSIONS_DIR": str(root / "claude"),
         }
         base = [
             sys.executable,

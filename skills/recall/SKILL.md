@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Retrieve indexed local agent history (Pi, DeepSeek Harness, Codex, opencode, CodeBuddy, WorkBuddy) and selected text/code directories with recall when past decisions, actions or discussions matter. Snippets are original material, not verified conclusions; use rg for exact symbols.
+description: Retrieve indexed local agent history (Pi, DeepSeek Harness, Codex, opencode, CodeBuddy, WorkBuddy, Claude Code) and selected text/code directories with recall when past decisions, actions or discussions matter. Snippets are original material, not verified conclusions; use rg for exact symbols.
 ---
 
 # recall
@@ -16,7 +16,7 @@ Indexing is explicit. Nothing is indexed merely because the executable is shared
 harness.
 
 - `sessions:*` — one corpus per agent: `pi`, `dsh`, `codex`, `opencode`, `codebuddy`,
-  `workbuddy`. Only conversation text (user/assistant) is indexed, never tool calls or
+  `workbuddy`, `claude`. Only conversation text (user/assistant) is indexed, never tool calls or
   tool outputs, and not every record survives the size caps.
 - `dir:*` — text directories added with `recall index dir PATH`.
 

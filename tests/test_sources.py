@@ -224,8 +224,102 @@ def test_iter_records_names_sources_per_agent(tmp_path):
 
 
 def test_agent_registry_covers_the_documented_set():
-    assert sources.AGENTS == ("pi", "dsh", "codex", "opencode", "codebuddy", "workbuddy")
+    assert sources.AGENTS == (
+        "pi",
+        "dsh",
+        "codex",
+        "opencode",
+        "codebuddy",
+        "workbuddy",
+        "claude",
+    )
     assert all(sources.LABELS[a] for a in sources.AGENTS)
+
+
+# ── claude：type 就是角色，正文在 message.content ──────────────────
+
+
+def _claude_line(kind, timestamp="2026-06-17T08:09:19.270Z", **fields):
+    return json.dumps({"type": kind, "timestamp": timestamp, "uuid": "u1", **fields})
+
+
+def test_claude_reader_takes_text_blocks_only(tmp_path):
+    """``thinking`` 用 ``thinking`` 字段、工具块没有 ``text`` —— 只应收到正文。"""
+    path = tmp_path / "fbaa997b-a430-4605-b06e-ead2aa8b8596.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                _claude_line(
+                    "user",
+                    message={
+                        "role": "user",
+                        "content": [{"type": "text", "text": "把 edk2 的构建脚本改成 Ninja"}],
+                    },
+                ),
+                _claude_line(
+                    "assistant",
+                    timestamp="2026-06-17T08:12:38.399Z",
+                    message={
+                        "role": "assistant",
+                        "content": [
+                            # 思维链：文本在 thinking 字段，不能进索引
+                            {"type": "thinking", "thinking": "先看 build 目录", "signature": "x"},
+                            {"type": "text", "text": "已经改成 Ninja，并跑通了一次增量构建。"},
+                            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+                        ],
+                    },
+                ),
+                # content 是纯字符串也要收
+                _claude_line("user", message={"role": "user", "content": "再顺手把测试也跑一遍"}),
+                # 纯工具结果：没有 text 块 → 丢弃
+                _claude_line(
+                    "user",
+                    message={
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "t1", "content": "huge output"}
+                        ],
+                    },
+                ),
+                # 非对话行
+                _claude_line("mode", mode="default"),
+                _claude_line("permission-mode", permissionMode="acceptEdits"),
+                _claude_line("ai-title", aiTitle="edk2 Ninja"),
+                _claude_line("file-history-snapshot", isSnapshotUpdate=True),
+                _claude_line("system", content="system prompt"),
+                # 太短
+                _claude_line("assistant", message={"role": "assistant", "content": "ok"}),
+            ]
+        )
+        + "\n"
+    )
+    rows = list(sources.iter_claude_file(path))
+    assert [r[0] for r in rows] == ["user", "assistant", "user"]
+    assert "Ninja" in rows[0][2]
+    assert "增量构建" in rows[1][2]
+    assert "先看 build 目录" not in rows[1][2]  # 思维链没被收进来
+    assert rows[2][2] == "再顺手把测试也跑一遍"
+    # 毫秒 + Z 的时间戳截成和其它来源一致的 19 位
+    assert rows[0][1] == "2026-06-17T08:09:19"
+
+
+def test_claude_reader_keeps_sidechain_and_strips_the_cwd_prefix(tmp_path):
+    """子代理会话保留；来源用相对路径（和别的文件型来源一致）。"""
+    root = tmp_path / "projects"
+    proj = root / "-Users-x-Dev-demo"
+    proj.mkdir(parents=True)
+    (proj / "s1.jsonl").write_text(
+        _claude_line(
+            "user",
+            isSidechain=True,
+            message={"role": "user", "content": [{"type": "text", "text": "子代理的任务描述"}]},
+        )
+        + "\n"
+    )
+    rows = list(sources.iter_records("claude", root))
+    assert len(rows) == 1
+    assert rows[0][0] == "-Users-x-Dev-demo/s1.jsonl"
+    assert "子代理" in rows[0][3]
 
 
 # ── codebuddy / workbuddy：两个产品共用一套写入器 ──────────────────

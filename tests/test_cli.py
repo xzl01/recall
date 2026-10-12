@@ -62,6 +62,7 @@ def test_nested_session_sources_remain_distinct(tmp_path):
         e.OPENCODE_PATH = tmp_path / "opencode.db"
         e.CODEBUDDY_SESSIONS = tmp_path / "codebuddy"
         e.WORKBUDDY_SESSIONS = tmp_path / "workbuddy"
+        e.CLAUDE_SESSIONS = tmp_path / "claude"
         for name in ["a", "b"]:
             p = e.SESSIONS / name / "same.jsonl"
             p.parent.mkdir(parents=True)

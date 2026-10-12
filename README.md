@@ -1,6 +1,6 @@
 # recall
 
-Local retrieval for an agent's history and source code. Recall indexes the session history of six agents — Pi, DeepSeek Harness, Codex, opencode, CodeBuddy and WorkBuddy — plus selected text directories, combines BGE embeddings with SQLite FTS5, and returns source snippets with stable IDs and neighboring context.
+Local retrieval for an agent's history and source code. Recall indexes the session history of seven agents — Pi, DeepSeek Harness, Codex, opencode, CodeBuddy, WorkBuddy and Claude Code — plus selected text directories, combines BGE embeddings with SQLite FTS5, and returns source snippets with stable IDs and neighboring context.
 
 **Retrieval runs locally.** No LLM provider or API key is needed. Model setup downloads public weights when you request it. Your index stays outside the repository.
 
@@ -90,7 +90,7 @@ recall stats
 
 ### Agent history
 
-`recall index sessions` reads the history of six agents, each into its own corpus (`sessions:pi`, `sessions:dsh`, …); path overrides are environment variables:
+`recall index sessions` reads the history of seven agents, each into its own corpus (`sessions:pi`, `sessions:dsh`, …); path overrides are environment variables:
 
 | agent | location | format | override |
 | --- | --- | --- | --- |
@@ -100,10 +100,11 @@ recall stats
 | opencode | `~/.local/share/opencode/opencode.db` | SQLite | `RECALL_OPENCODE_DB` |
 | CodeBuddy | `~/.codebuddy/projects` | plain JSONL | `RECALL_CODEBUDDY_SESSIONS_DIR` |
 | WorkBuddy | `~/.workbuddy/projects` | plain JSONL | `RECALL_WORKBUDDY_SESSIONS_DIR` |
+| Claude Code | `~/.claude/projects` | plain JSONL | `RECALL_CLAUDE_SESSIONS_DIR` |
 
 A source whose directory does not exist is reported and skipped, so a machine that never ran an agent needs no setup. CodeBuddy and WorkBuddy share one reader — Tencent's two products write the same local session format — but note that the **CodeBuddy IDE keeps conversations server-side** and leaves nothing indexable on disk; `~/.codebuddy/projects` is what the CodeBuddy CLI writes.
 
-Only **conversation text** (user/assistant messages) is indexed — tool calls and tool outputs carry little retrieval value relative to their size, so they are skipped. Records longer than 200,000 characters are skipped, and JSONL lines larger than 1 MiB are dropped before parsing; both counts are reported. That keeps reading bounded: it used to peak at 2 GB (a single Codex session is 986 MB), and now peaks near 100 MB — a full run of 22k records → 63k windows peaks around 670 MB. See [docs/agent-history.md](docs/agent-history.md) for the per-agent event mapping and the measurements behind those limits.
+Only **conversation text** (user/assistant messages) is indexed — tool calls and tool outputs carry little retrieval value relative to their size, so they are skipped. Records longer than 200,000 characters are skipped, and JSONL lines larger than 1 MiB are dropped before parsing; both counts are reported. That keeps reading bounded: it used to peak at 2 GB (a single Codex session is 986 MB), and now peaks near 100 MB — a full run of 24k records → 64k windows peaks around 670 MB. See [docs/agent-history.md](docs/agent-history.md) for the per-agent event mapping and the measurements behind those limits.
 
 - Long records use 448-token windows with 64-token overlap.
 - Hybrid retrieval reserves candidates for strong keyword matches, retaining hits that pure rank fusion could bury.
