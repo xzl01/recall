@@ -28,6 +28,16 @@ python3 -m venv .venv
 
 `recall setup` follows the platform default; pass `--mlx`, `--openvino` or `--gguf` to force one. `RECALL_BACKEND=auto` (the default) takes the platform default and falls back to the other fp32 engine if its dependency is missing. An explicit `RECALL_BACKEND` never falls back — it errors instead of silently switching.
 
+`pip install -e` puts `recall` only inside the environment you installed into. Other tools — and other agents, which see nothing but your `PATH` — will not find it. To run the checkout from anywhere, add a shim to a directory on your `PATH`:
+
+```sh
+#!/bin/sh
+# ~/.local/bin/recall
+exec /path/to/checkout/.venv/bin/recall "$@"
+```
+
+Make the shim check that the binary exists first. A checkout on a removable volume, or a virtualenv that has not been rebuilt, otherwise fails as a bare `command not found` — which reads as "not installed" rather than "not mounted", and is the harder problem to diagnose.
+
 **GGUF is never selected automatically.** It is usually a *quantised* artifact, so its vectors live in a different space from the fp32 weights — recall therefore binds every index to the model identity it was built from and refuses to search or append with a different one. Switching engines (or quantisation levels) means rebuilding the index. `llama-cpp-python` ships no wheels, so `.[gguf]` compiles on install and needs a C++ toolchain and cmake.
 
 Both engines load the **same** `BAAI/bge-small-zh-v1.5` weights and keep the same semantics: CLS pooling, L2 normalisation, 512 dimensions, and the same Chinese query prefix, so an index built by one engine can be read by the other. The index now records the **model identity** it was built from (the source `model.safetensors` digest, which both engines share) and refuses to search or append with a different one — swapping weights for another 512-dimension BERT used to silently return wrong results.
