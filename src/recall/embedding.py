@@ -18,7 +18,9 @@ class Embedder:
     def __init__(
         self, model_dir=MODEL_DIR, device=DEFAULT_DEVICE, buckets=BUCKETS, batch=1, verbose=False
     ):
-        # Resident-service clients need constants/classes, not the OpenVINO runtime.
+        # Import lazily: a resident-service client needs these constants and the class,
+        # not an inference runtime. MLX and GGUF import their engines inside __init__
+        # for the same reason.
         import openvino as ov
 
         self.model_dir = pathlib.Path(model_dir)
