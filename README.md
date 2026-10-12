@@ -10,22 +10,25 @@ Local retrieval for an agent's history and source code. Recall indexes Pi JSONL 
 
 Python 3.10+ on Linux/POSIX. Windows is currently unsupported because indexing uses POSIX locks and the daemon uses Unix sockets.
 
-### Backends: one project, two embedding engines
+### Backends: one project, three embedding engines
 
-The retrieval pipeline is engine-agnostic; the embedding layer has two interchangeable implementations, picked by platform:
+The retrieval pipeline is engine-agnostic; the embedding layer has interchangeable implementations. The first two are picked by platform, GGUF is opt-in:
 
 | Platform | Default backend | Install |
 | --- | --- | --- |
 | Apple Silicon (darwin / arm64) | **MLX** (Metal) | `pip install '.[mlx]'` |
 | Linux, Intel macOS, other | **OpenVINO** | `pip install '.[openvino]'` |
+| any platform, explicit only | **GGUF** (llama.cpp) | `pip install '.[gguf]'` |
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e '.[mlx]'      # or '.[openvino]'
+.venv/bin/pip install -e '.[mlx]'      # or '.[openvino]' / '.[gguf]'
 .venv/bin/recall setup                  # installs the model for your platform's backend
 ```
 
-`recall setup` follows the platform default; pass `--mlx` or `--openvino` to force the other one. `RECALL_BACKEND=auto` (the default) takes the platform default and falls back to the other engine if its dependency is missing, so Linux behaviour is unchanged. An explicit `RECALL_BACKEND=openvino|mlx` never falls back — it errors instead of silently switching.
+`recall setup` follows the platform default; pass `--mlx`, `--openvino` or `--gguf` to force one. `RECALL_BACKEND=auto` (the default) takes the platform default and falls back to the other fp32 engine if its dependency is missing. An explicit `RECALL_BACKEND` never falls back — it errors instead of silently switching.
+
+**GGUF is never selected automatically.** It is usually a *quantised* artifact, so its vectors live in a different space from the fp32 weights — recall therefore binds every index to the model identity it was built from and refuses to search or append with a different one. Switching engines (or quantisation levels) means rebuilding the index. `llama-cpp-python` ships no wheels, so `.[gguf]` compiles on install and needs a C++ toolchain and cmake.
 
 Both engines load the **same** `BAAI/bge-small-zh-v1.5` weights and keep the same semantics: CLS pooling, L2 normalisation, 512 dimensions, and the same Chinese query prefix, so an index built by one engine can be read by the other. The index now records the **model identity** it was built from (the source `model.safetensors` digest, which both engines share) and refuses to search or append with a different one — swapping weights for another 512-dimension BERT used to silently return wrong results.
 

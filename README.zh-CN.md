@@ -6,12 +6,16 @@
 
 ## 安装
 
-一套代码、两套嵌入引擎，按平台自动挑：**Apple Silicon 用 MLX（Metal），Intel / Linux 用 OpenVINO**。
-两者加载同一份 `BAAI/bge-small-zh-v1.5`，池化、维度、中文查询前缀都一致，索引可互换。
-详见[后端说明](docs/backends.md)。
+一套代码、三套嵌入引擎。前两套按平台自动挑：**Apple Silicon 用 MLX（Metal），Intel / Linux 用
+OpenVINO**；第三套 **GGUF（llama.cpp）** 跨平台但要显式指定。三者加载同一份
+`BAAI/bge-small-zh-v1.5`，池化、维度、中文查询前缀都一致。
 
-真实模型推理已在 Linux x86_64/OpenVINO CPU、GPU 上验证（NPU 依赖相应驱动与编译器），
-以及 Apple Silicon/MLX 上对照 `transformers` 参考实现验证（最大绝对误差 8.0e-07）。
+GGUF 通常是**量化**权重，向量空间和 fp32 不是同一个，所以它不会被自动选中；索引会记录
+建立它的模型身份，换引擎或换量化档位需要重建索引。详见[后端说明](docs/backends.md)。
+
+真实模型推理已在 Linux x86_64/OpenVINO CPU、GPU 上验证（NPU 依赖相应驱动与编译器）、
+在 Apple Silicon/MLX 上对照 `transformers` 参考实现验证（最大绝对误差 8.0e-07），
+以及 Apple Silicon/GGUF 上对照同一参考验证（f16 最大绝对误差 3.8e-04）。
 当前不支持 Windows。
 
 ```bash
@@ -19,8 +23,8 @@ git clone https://github.com/xzl01/recall.git
 cd recall
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e '.[mlx]'        # Apple Silicon；Intel / Linux 用 '.[openvino]'
-recall setup                   # 按平台默认装模型；--mlx / --openvino 可强制
+pip install -e '.[mlx]'        # Apple Silicon；Intel / Linux 用 '.[openvino]'；GGUF 用 '.[gguf]'
+recall setup                   # 按平台默认装模型；--mlx / --openvino / --gguf 可强制
 
 recall index sessions
 recall index dir ./my-project --ext .py,.md,.ts

@@ -1,16 +1,19 @@
-"""嵌入后端选择：Apple Silicon 用 MLX，Intel / x86_64 平台用 OpenVINO。
+"""嵌入后端选择：Apple Silicon 用 MLX，Intel / x86_64 平台用 OpenVINO，GGUF 可选。
 
-一个 recall 项目、两套推理后端，按平台自动挑：
+一个 recall 项目、三套推理后端。前两套按平台自动挑：
 
 | 平台 | 默认后端 | 依赖 |
 | --- | --- | --- |
 | Apple Silicon（darwin + arm64） | MLX | `pip install '.[mlx]'` |
 | Linux / Intel macOS / 其它 | OpenVINO | `pip install '.[openvino]'` |
+| 任意平台（需显式指定） | GGUF | `pip install '.[gguf]'` |
 
-``RECALL_BACKEND`` 取 ``auto``（默认）/ ``openvino`` / ``mlx``：
+``RECALL_BACKEND`` 取 ``auto``（默认）/ ``openvino`` / ``mlx`` / ``gguf``：
 
 - ``auto`` 先按平台默认挑；该后端的依赖没装时回退到另一个，两个都没有才报错。
   所以 Linux 上的既有行为不变，Apple Silicon 上不装 OpenVINO 也能直接跑。
+- ``gguf`` **只按显式指定生效**，不参与 auto：它通常是量化权重，向量空间和 fp32
+  不是同一个，不能悄悄替换掉用户已有的索引。
 - 显式指定则不做回退，缺依赖时报错而不是静默换后端。
 
 这里刻意把两件事分开：
@@ -31,17 +34,24 @@ import pathlib
 import platform
 import sys
 
-from .config import BACKEND, MLX_MODEL_DIR, MODEL_DIR
+from .config import BACKEND, GGUF_MODEL_DIR, MLX_MODEL_DIR, MODEL_DIR
 
-#: 后端名 → 需要能 import 的模块名（两者的发行包名不同）。
-MODULES = {"openvino": "openvino", "mlx": "mlx"}
+#: 后端名 → 需要能 import 的模块名（发行包名和 import 名并不一致）。
+MODULES = {"openvino": "openvino", "mlx": "mlx", "gguf": "llama_cpp"}
+
+#: 后端名 → 给人看的名字。
+DISPLAY = {"openvino": "OpenVINO", "mlx": "MLX", "gguf": "GGUF (llama.cpp)"}
 
 INSTALL_HINT = {
     "openvino": "pip install '.[openvino]'",
     "mlx": "pip install '.[mlx]'",
+    "gguf": "pip install '.[gguf]'（llama-cpp-python 没有预编译轮子，需要 C++ 工具链与 cmake）",
 }
 
-ALIASES = {"ov": "openvino", "openvino": "openvino", "mlx": "mlx"}
+#: ``gguf`` 只能显式选择：它通常是**量化**权重，向量空间和 fp32 权重不是同一个，
+#: 不该被 auto 悄悄选中。
+PLATFORM_BACKENDS = ("openvino", "mlx")
+ALIASES = {"ov": "openvino", "openvino": "openvino", "mlx": "mlx", "gguf": "gguf"}
 
 NO_BACKEND_MESSAGE = (
     "没有可用的嵌入后端：Apple Silicon 上装 MLX（pip install '.[mlx]'），"
@@ -81,7 +91,11 @@ def configured_backend() -> str:
 
 
 def model_dir_for(backend: str) -> pathlib.Path:
-    return MLX_MODEL_DIR if backend == "mlx" else MODEL_DIR
+    if backend == "mlx":
+        return MLX_MODEL_DIR
+    if backend == "gguf":
+        return GGUF_MODEL_DIR
+    return MODEL_DIR
 
 
 def candidate_model_dirs() -> tuple[pathlib.Path, ...]:
@@ -112,8 +126,9 @@ def active_backend() -> str:
         raise RuntimeError(NO_BACKEND_MESSAGE)
     backend = configured_backend()
     if not runtime_available(backend):
-        name = "OpenVINO" if backend == "openvino" else "MLX"
-        raise RuntimeError(f"RECALL_BACKEND={backend} 但没装 {name}：{INSTALL_HINT[backend]}")
+        raise RuntimeError(
+            f"RECALL_BACKEND={backend} 但没装 {DISPLAY[backend]}：{INSTALL_HINT[backend]}"
+        )
     return backend
 
 
@@ -132,6 +147,10 @@ def embedder_class(backend: str | None = None):
         from .mlx_embedding import MLXEmbedder
 
         return MLXEmbedder
+    if (backend or active_backend()) == "gguf":
+        from .gguf_embedding import GGUFEmbedder
+
+        return GGUFEmbedder
     from .embedding import Embedder
 
     return Embedder

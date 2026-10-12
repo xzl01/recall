@@ -11,7 +11,7 @@ import tempfile
 import urllib.request
 
 from .backend import active_backend
-from .config import MODEL_DIR, MLX_MODEL_DIR
+from .config import GGUF_MODEL_DIR, MODEL_DIR, MLX_MODEL_DIR
 from .identity import file_sha256
 
 MODEL_ID = "BAAI/bge-small-zh-v1.5"
@@ -28,6 +28,15 @@ ENDPOINTS = {
 }
 # 两个站点的默认分支名不同：ModelScope 用 master，HuggingFace 用 main。
 DEFAULT_REVISION = {"modelscope": "master", "huggingface": "main"}
+
+# GGUF 后端：一个 .gguf 加一份 HF 分词器。分词器不能省 —— 分块和查询前缀都要用，
+# 而且 GGUF 的嵌入也刻意走 HF 的 token id（见 gguf_embedding 的说明）。
+TOKENIZER_FILE = "tokenizer.json"
+GGUF_REPO = "CompendiumLabs/bge-small-zh-v1.5-gguf"
+# f16 是默认档：比 fp32 小一半，实测与 fp32 的最大绝对差只有 3.8e-04
+# （f32 是 3.1e-04，q8_0 是 4.7e-03，q4_k_m 是 2.9e-02）。
+GGUF_FILE = "bge-small-zh-v1.5-f16.gguf"
+GGUF_SOURCE = "huggingface"
 
 
 def validate(path):
@@ -122,31 +131,33 @@ def _hint(hub, name, error):
     )
 
 
+def _download_one(url, destination, hub, hf_ip, label):
+    """下一个文件；连接层失败且本地 DNS 被投毒时，用 DoH 拿真实地址重试一次。"""
+    try:
+        _fetch(url, destination, _pinned_dns("huggingface.co", hf_ip) if hf_ip else None)
+    except urllib.error.HTTPError as error:
+        # 拿到了真实 HTTP 响应，说明连接是通的，问题在路径/分支名，不该再折腾 DNS。
+        raise RuntimeError(_hint(hub, label, error)) from None
+    except OSError as error:
+        if hub != "huggingface" or hf_ip:
+            raise RuntimeError(_hint(hub, label, error)) from None
+        try:
+            addresses = _doh_resolve("huggingface.co")
+        except OSError:
+            addresses = []
+        if not addresses:
+            raise RuntimeError(_hint(hub, label, error)) from None
+        print(f"  连接失败（{error}）；改用 DoH 解析到 {addresses[0]} 重试", flush=True)
+        try:
+            _fetch(url, destination, _pinned_dns("huggingface.co", addresses[0]))
+        except OSError as retry_error:
+            raise RuntimeError(_hint(hub, label, retry_error)) from None
+
+
 def _download(stage, hub, repo, revision, hf_ip=None):
     for name in MLX_FILES:
-        url = _url(hub, repo, revision, name)
         print(f"  下载 {name} ...", flush=True)
-        try:
-            _fetch(url, stage / name, _pinned_dns("huggingface.co", hf_ip) if hf_ip else None)
-        except urllib.error.HTTPError as error:
-            # 拿到了真实 HTTP 响应，说明连接是通的，问题在路径/分支名，不该再折腾 DNS。
-            raise RuntimeError(_hint(hub, name, error)) from None
-        except OSError as error:
-            # 连接层失败。本地 DNS 被投毒时会表现为证书不匹配（连到无关 IP），
-            # 这时用 DoH 取真实地址重试一次。
-            if hub != "huggingface" or hf_ip:
-                raise RuntimeError(_hint(hub, name, error)) from None
-            try:
-                addresses = _doh_resolve("huggingface.co")
-            except OSError:
-                addresses = []
-            if not addresses:
-                raise RuntimeError(_hint(hub, name, error)) from None
-            print(f"  连接失败（{error}）；改用 DoH 解析到 {addresses[0]} 重试", flush=True)
-            try:
-                _fetch(url, stage / name, _pinned_dns("huggingface.co", addresses[0]))
-            except OSError as retry_error:
-                raise RuntimeError(_hint(hub, name, retry_error)) from None
+        _download_one(_url(hub, repo, revision, name), stage / name, hub, hf_ip, name)
 
 
 def install_mlx(args):
@@ -198,6 +209,118 @@ def install_mlx(args):
     print(f"MLX 模型已配置：{destination}")
 
 
+def _gguf_field(reader, name):
+    field = reader.fields.get(name)
+    if field is None:
+        return None
+    try:
+        part = field.parts[field.data[0]]
+        if field.types[0].name == "STRING":
+            return bytes(part).decode("utf-8")
+        value = part.tolist()
+        # 标量字段（层数、维度、池化方式）在 gguf 里也是单元素数组。
+        return value[0] if isinstance(value, list) and len(value) == 1 else value
+    except Exception:
+        return None
+
+
+def validate_gguf(path, weights):
+    """校验 GGUF 目录：权重在、tokenizer 可加载、架构与池化方式符合 recall 的要求。"""
+    from tokenizers import Tokenizer
+
+    weights_path = Path(path) / weights
+    if not weights_path.is_file():
+        raise ValueError(f"Missing model file: {weights_path}")
+    tokenizer_path = Path(path) / TOKENIZER_FILE
+    if not tokenizer_path.is_file():
+        raise ValueError(
+            f"Missing model file: {tokenizer_path}（GGUF 也必须带 HF 分词器：分块和查询前缀都要用）"
+        )
+    Tokenizer.from_file(str(tokenizer_path))
+    try:
+        from gguf import GGUFReader
+    except ImportError:
+        return  # 元数据校验是加分项，没装 gguf 包时不阻塞
+    try:
+        reader = GGUFReader(str(weights_path))
+        arch = _gguf_field(reader, "general.architecture")
+        pooling = _gguf_field(reader, "bert.pooling_type")
+        dimension = _gguf_field(reader, "bert.embedding_length")
+    except Exception:
+        return  # 元数据读不出来时交给运行时校验，不在这里误报
+    if arch is not None and arch != "bert":
+        raise ValueError(f"GGUF 架构是 {arch!r}，recall 只支持 BERT")
+    if dimension is not None and dimension != 512:
+        raise ValueError(f"GGUF 输出维度是 {dimension}，recall 需要 512")
+    if pooling is not None and pooling != 2:
+        raise ValueError(f"GGUF 池化方式是 {pooling}，不是 CLS（2）")
+
+
+def _gguf_name(source: Path, requested: str) -> str:
+    """确定要用的 .gguf 文件名：优先用请求的那个，否则要求目录里只有一个。"""
+    if (source / requested).is_file():
+        return requested
+    found = sorted(source.glob("*.gguf"))
+    if not found:
+        raise ValueError(f"{source} 里没有 .gguf 文件")
+    if len(found) > 1:
+        raise ValueError(
+            f"{source} 里有多个 .gguf，请用 --gguf-file 指定：{[p.name for p in found]}"
+        )
+    return found[0].name
+
+
+def install_gguf(args):
+    """装 GGUF 后端的模型：一个 .gguf 加一份 HF 分词器。"""
+    destination = GGUF_MODEL_DIR
+    source = Path(args.existing) if args.existing else None
+    weights = _gguf_name(source, args.gguf_file) if source else args.gguf_file
+    if destination.exists() and any(destination.iterdir()):
+        validate_gguf(destination, weights)
+        print(f"GGUF 模型已配置：{destination}")
+        return
+
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix=".model-stage-", dir=destination.parent) as temp:
+        stage = Path(temp) / "model"
+        stage.mkdir(parents=True)
+        if source:
+            validate_gguf(source, weights)
+            for name in (weights, TOKENIZER_FILE):
+                shutil.copy2(source / name, stage / name)
+            revision = None
+        else:
+            revision = args.revision or DEFAULT_REVISION[args.hub]
+            for name, repo in ((weights, args.gguf_repo), (TOKENIZER_FILE, MODEL_ID)):
+                print(f"  下载 {name} ...", flush=True)
+                _download_one(
+                    _url(args.hub, repo, revision, name),
+                    stage / name,
+                    args.hub,
+                    args.hf_ip,
+                    name,
+                )
+        validate_gguf(stage, weights)
+        manifest = {
+            "model": args.gguf_repo,
+            "file": weights,
+            "source": "local" if source else args.hub,
+            "revision": revision,
+            "backend": "gguf",
+            "dimension": 512,
+            "pooling": "CLS",
+            "normalized": True,
+            # 刻意不写 source_sha256：GGUF 是另一份产物（通常还量化过），身份就按
+            # .gguf 自身算，这样它不会和 fp32 建立的索引混在一起。
+            "sha256": {n: file_sha256(stage / n) for n in (weights, TOKENIZER_FILE)},
+        }
+        (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        if destination.exists():
+            destination.rmdir()  # Only remove an empty destination.
+        os.rename(stage, destination)
+    print(f"GGUF 模型已配置：{destination}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     backend = parser.add_mutually_exclusive_group()
@@ -210,6 +333,17 @@ def main(argv=None):
         "--openvino",
         action="store_true",
         help="强制导出 OpenVINO IR（Intel / Linux 平台的默认行为）",
+    )
+    backend.add_argument(
+        "--gguf",
+        action="store_true",
+        help="强制装 GGUF（llama.cpp）后端；只在显式指定时启用，不参与平台默认",
+    )
+    parser.add_argument("--gguf-repo", default=GGUF_REPO, help=f"GGUF 仓库（默认 {GGUF_REPO}）")
+    parser.add_argument(
+        "--gguf-file",
+        default=GGUF_FILE,
+        help=f"GGUF 文件名（默认 {GGUF_FILE}；f32/f16 保真，q8_0/q4_k_m 更小但漂移更大）",
     )
     parser.add_argument(
         "--hub",
@@ -241,10 +375,19 @@ def main(argv=None):
     # 显式给了 MLX 专属选项（--hub / --hf-ip）也视为要 MLX，避免用户还要多打一个开关。
     if a.openvino:
         chosen = "openvino"
+    elif a.gguf:
+        chosen = "gguf"
     elif a.mlx or a.hub or a.hf_ip:
         chosen = "mlx"
     else:
         chosen = active_backend()
+
+    if chosen == "gguf":
+        if a.source:
+            raise ValueError("--source 是 OpenVINO 导出用的；GGUF 用 --from 或 --hub")
+        a.hub = a.hub or GGUF_SOURCE
+        return install_gguf(a)
+
     a.hub = a.hub or DEFAULT_SOURCE
 
     if chosen == "mlx":
@@ -253,6 +396,8 @@ def main(argv=None):
         return install_mlx(a)
     if a.hf_ip or a.repo != MODEL_ID or a.revision:
         raise ValueError("--repo / --revision / --hf-ip 只对 MLX 后端有意义")
+    if a.gguf_repo != GGUF_REPO or a.gguf_file != GGUF_FILE:
+        raise ValueError("--gguf-repo / --gguf-file 只对 GGUF 后端有意义")
 
     return install_openvino(a)
 

@@ -27,15 +27,20 @@ Global options (also accepted after a command):
   --batch N             Embedding batch size (default 8)
   --version
 
-Backends (one project, two engines — picked by platform):
+Backends (one project, three engines; the first two are picked by platform):
   Apple Silicon (darwin/arm64)   MLX       pip install '.[mlx]'
   Intel / Linux / other          OpenVINO  pip install '.[openvino]'
-  RECALL_BACKEND        auto (default) | openvino | mlx. `auto` takes the
+  any platform (explicit only)   GGUF      pip install '.[gguf]'
+  RECALL_BACKEND        auto (default) | openvino | mlx | gguf. `auto` takes the
                         platform default and falls back if its deps are absent.
+                        gguf is never picked automatically: it is usually
+                        quantised, so its vectors are a different space.
   RECALL_MLX_MODEL_DIR  MLX safetensors directory
                         (default $RECALL_HOME/models/bge-small-zh-v1.5-mlx).
+  RECALL_GGUF_MODEL_DIR GGUF directory: one .gguf plus tokenizer.json
+                        (default $RECALL_HOME/models/bge-small-zh-v1.5-gguf).
   `recall setup` installs the model for the platform's default backend;
-  use --mlx / --openvino to force the other one.
+  use --mlx / --openvino / --gguf to force one.
 
 Original flags remain available: --status, --index, --read ID,
 --semantic, --neighbors, --chars, --full, --chat and --code.

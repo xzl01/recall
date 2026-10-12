@@ -198,3 +198,155 @@ def test_whoami_reports_metadata_without_a_local_runtime(monkeypatch, tmp_path, 
     payload = daemon.whoami_payload("CPU", Fake())
     assert payload["ok"] and payload["backend"] == daemon.BACKEND_NAME
     assert payload["dim"] == 512 and payload["devices"] == ["CPU"]
+
+
+# ── GGUF 后端 ────────────────────────────────────────────────────────
+
+
+def test_gguf_is_opt_in_and_never_a_platform_default(monkeypatch, fake_install):
+    """GGUF 通常是量化权重，向量空间和 fp32 不同，不能进 auto。"""
+    fake_install.update({"mlx", "openvino", "gguf"})  # 连 llama.cpp 都装了
+    monkeypatch.setattr(backend, "BACKEND", "auto")
+    monkeypatch.setattr(backend, "is_apple_silicon", lambda: True)
+    assert backend.active_backend() == "mlx"
+    monkeypatch.setattr(backend, "is_apple_silicon", lambda: False)
+    assert backend.active_backend() == "openvino"
+    assert "gguf" not in [p.name for p in backend.candidate_model_dirs()]
+
+
+def test_gguf_is_selected_only_when_asked(monkeypatch, fake_install):
+    monkeypatch.setattr(backend, "BACKEND", "gguf")
+    assert backend.configured_backend() == "gguf"
+    assert backend.candidate_model_dirs() == (backend.GGUF_MODEL_DIR,)
+    assert backend.model_dir_for("gguf") == backend.GGUF_MODEL_DIR
+    with pytest.raises(RuntimeError, match="没装 GGUF"):
+        backend.active_backend()
+    fake_install.add("gguf")
+    assert backend.active_backend() == "gguf"
+
+
+def test_gguf_resolves_to_its_own_embedder(monkeypatch):
+    from recall.gguf_embedding import GGUFEmbedder
+
+    monkeypatch.setattr(backend, "active_backend", lambda: "gguf")
+    assert backend.embedder_class() is GGUFEmbedder
+    for name in ("encode", "encode_query", "_get_compiled"):
+        assert callable(getattr(GGUFEmbedder, name, None)), name
+
+
+def test_gguf_weights_must_be_unambiguous(tmp_path):
+    """多个量化档位放在一起会猜错，宁可要求用户明确。"""
+    from recall.gguf_embedding import find_weights
+
+    with pytest.raises(RuntimeError, match="没有 .gguf"):
+        find_weights(tmp_path)
+    (tmp_path / "a.gguf").write_bytes(b"a")
+    assert find_weights(tmp_path).name == "a.gguf"
+    (tmp_path / "b.gguf").write_bytes(b"b")
+    with pytest.raises(RuntimeError, match="多个 .gguf"):
+        find_weights(tmp_path)
+
+
+def test_gguf_identity_uses_the_gguf_artifact(tmp_path):
+    """GGUF 目录没有 manifest 时，身份退回 .gguf 自身摘要。"""
+    from recall.identity import model_identity
+
+    (tmp_path / "m.gguf").write_bytes(b"weights")
+    first = model_identity(tmp_path)
+    assert first and first.startswith("bge-cls-l2-v1:")
+    (tmp_path / "m.gguf").write_bytes(b"other-weights")
+    assert model_identity(tmp_path) != first
+
+
+def _stub_reader(architecture=b"bert", pooling=2, dimension=512):
+    class Part:
+        def __init__(self, value):
+            self.value = value
+
+        def tolist(self):
+            return self.value
+
+        def __bytes__(self):
+            return bytes(self.value)
+
+    class Field:
+        def __init__(self, value, kind="UINT32"):
+            self.parts = [Part(value)]
+            self.data = [0]
+            self.types = [types.SimpleNamespace(name=kind)]
+
+    fields = {
+        "general.architecture": Field(list(architecture), "STRING"),
+        "bert.pooling_type": Field([pooling]),
+        "bert.embedding_length": Field([dimension]),
+    }
+
+    class Reader:
+        def __init__(self, path):
+            self.fields = fields
+
+    return Reader
+
+
+def _write_gguf_dir(tmp_path):
+    from tokenizers import Tokenizer, models
+
+    (tmp_path / "m.gguf").write_bytes(b"x")
+    Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")).save(
+        str(tmp_path / "tokenizer.json")
+    )
+
+
+def test_scalar_gguf_metadata_fields_are_unwrapped():
+    """gguf 里标量也是单元素数组；曾经因此把 512 错判成维度不符。"""
+    from recall import setup
+
+    reader = types.SimpleNamespace(
+        fields={"bert.embedding_length": _stub_reader()(None).fields["bert.embedding_length"]}
+    )
+    assert setup._gguf_field(reader, "bert.embedding_length") == 512
+    assert setup._gguf_field(reader, "missing") is None
+    assert setup._gguf_field(_stub_reader()(None), "general.architecture") == "bert"
+
+
+def test_validate_gguf_checks_architecture_pooling_and_dimension(monkeypatch, tmp_path):
+    from recall import setup
+
+    _write_gguf_dir(tmp_path)
+    monkeypatch.setitem(
+        sys.modules, "gguf", types.SimpleNamespace(GGUFReader=_stub_reader(pooling=2))
+    )
+    setup.validate_gguf(tmp_path, "m.gguf")  # CLS + 512：通过
+
+    monkeypatch.setitem(
+        sys.modules, "gguf", types.SimpleNamespace(GGUFReader=_stub_reader(pooling=1))
+    )
+    with pytest.raises(ValueError, match="不是 CLS"):
+        setup.validate_gguf(tmp_path, "m.gguf")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "gguf",
+        types.SimpleNamespace(GGUFReader=_stub_reader(architecture=b"llama")),
+    )
+    with pytest.raises(ValueError, match="只支持 BERT"):
+        setup.validate_gguf(tmp_path, "m.gguf")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "gguf",
+        types.SimpleNamespace(GGUFReader=_stub_reader(dimension=768)),
+    )
+    with pytest.raises(ValueError, match="需要 512"):
+        setup.validate_gguf(tmp_path, "m.gguf")
+
+
+def test_validate_gguf_reports_missing_files_clearly(tmp_path):
+    from recall import setup
+
+    with pytest.raises(ValueError, match="m.gguf"):
+        setup.validate_gguf(tmp_path, "m.gguf")
+    (tmp_path / "m.gguf").write_bytes(b"x")
+    # 缺分词器时报清楚的错，而不是底层 from_file 的裸异常
+    with pytest.raises(ValueError, match="tokenizer.json"):
+        setup.validate_gguf(tmp_path, "m.gguf")

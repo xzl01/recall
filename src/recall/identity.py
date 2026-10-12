@@ -22,8 +22,8 @@ import pathlib
 #: 池化/归一/前缀等语义变了也要算作不同身份，所以并进指纹里。
 SCHEMA = "bge-cls-l2-v1"
 
-#: 没有 source_sha256 时按顺序回退的权重产物。
-WEIGHT_FILES = ("model.safetensors", "ov/openvino_model.bin")
+#: 没有 source_sha256 时按顺序回退的权重产物。支持 glob（GGUF 文件名带量化档位）。
+WEIGHT_FILES = ("model.safetensors", "ov/openvino_model.bin", "*.gguf")
 
 
 def file_sha256(path: pathlib.Path) -> str:
@@ -33,6 +33,26 @@ def file_sha256(path: pathlib.Path) -> str:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _weight_digest(model_dir: pathlib.Path) -> str | None:
+    """权重产物的摘要。单个文件就是它自己的 sha256，多个则合并算。"""
+    for pattern in WEIGHT_FILES:
+        matches = (
+            sorted(model_dir.glob(pattern))
+            if "*" in pattern
+            else ([model_dir / pattern] if (model_dir / pattern).is_file() else [])
+        )
+        if not matches:
+            continue
+        if len(matches) == 1:
+            return file_sha256(matches[0])
+        combined = hashlib.sha256()
+        for path in matches:
+            combined.update(path.name.encode())
+            combined.update(file_sha256(path).encode())
+        return combined.hexdigest()
+    return None
 
 
 def recorded_source_digest(model_dir: pathlib.Path) -> str | None:
@@ -65,11 +85,7 @@ def model_identity(model_dir) -> str | None:
     model_dir = pathlib.Path(model_dir)
     digest = recorded_source_digest(model_dir)
     if digest is None:
-        for name in WEIGHT_FILES:
-            path = model_dir / name
-            if path.is_file():
-                digest = file_sha256(path)
-                break
+        digest = _weight_digest(model_dir)
     if digest is None:
         return None
     return f"{SCHEMA}:{digest}"

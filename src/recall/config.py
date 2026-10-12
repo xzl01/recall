@@ -19,6 +19,13 @@ MLX_MODEL_DIR = (
     .expanduser()
     .resolve()
 )
+# GGUF 后端的模型目录：放一个 .gguf 加一份 tokenizer.json（分块要用）。
+# GGUF 是另一份产物（通常还是量化过的），所以它有独立的索引身份。
+GGUF_MODEL_DIR = (
+    Path(os.environ.get("RECALL_GGUF_MODEL_DIR", str(DATA_DIR / "models/bge-small-zh-v1.5-gguf")))
+    .expanduser()
+    .resolve()
+)
 SESSIONS_DIR = (
     Path(os.environ.get("RECALL_SESSIONS_DIR", str(Path.home() / ".pi/agent/sessions")))
     .expanduser()
@@ -28,5 +35,5 @@ SOCKET_PATH = (
     Path(os.environ.get("RECALL_SOCKET", str(DATA_DIR / "embed.sock"))).expanduser().resolve()
 )
 DEFAULT_DEVICE = os.environ.get("RECALL_DEVICE", "CPU")
-# auto（默认：优先 OpenVINO，缺失则回退 MLX）/ openvino / mlx
+# auto（默认：优先 OpenVINO，缺失则回退 MLX）/ openvino / mlx / gguf
 BACKEND = os.environ.get("RECALL_BACKEND", "auto")
