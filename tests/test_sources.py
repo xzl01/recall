@@ -1,4 +1,4 @@
-"""四个 agent 的会话读取器：格式解析、过滤规则与边界。"""
+"""各 agent 的会话读取器：格式解析、过滤规则与边界。"""
 
 import json
 import pathlib

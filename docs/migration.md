@@ -6,7 +6,9 @@ To read an existing npulab index, configure `RECALL_HOME` to its state directory
 
 `recall migrate` converts legacy message-sized records into token windows while preserving all indexed corpora. An index already using windows requires no migration. The new daemon uses a different default socket and checks model identity; the older daemon can remain running independently.
 
-New session indexing records relative paths within the configured session root. Older indexes used file basenames; nested paths may therefore be treated as new sources until `recall index sessions --force` rebuilds the selected Pi history. Confirm the session root before forcing a rebuild.
+New session indexing records relative paths within the configured session root. Older indexes used file basenames; nested paths may therefore be treated as new sources until `recall index sessions --force` rebuilds the affected corpora. Confirm the session root before forcing a rebuild.
+
+Older versions kept every harness in one bare `sessions` corpus. Each agent now has its own (`sessions:pi`, `sessions:dsh`, …); an existing `sessions` corpus is renamed in place to `sessions:pi` when Pi is indexed, so nothing needs rebuilding. A machine that never ran Pi keeps the old corpus untouched.
 
 New directory corpus IDs add a root-path hash. Old `dir:project` records remain readable through the prefix filter; forcing a new hashed corpus does not delete old un-hashed records. For a clean directory migration, use a new state directory and index the desired directories, keeping the old paired index as a backup. There is no automatic destructive cleanup of legacy corpora.
 

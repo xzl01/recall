@@ -1,6 +1,6 @@
 # recall
 
-给 agent 使用的本地历史与代码检索工具：索引 Pi JSONL 会话和选定文本目录，用 BGE 语义嵌入与 SQLite FTS5 混合检索，返回可追溯原文、稳定 ID 和相邻上下文。
+给 agent 使用的本地历史与代码检索工具：索引六个 agent 的会话历史（Pi、DeepSeek Harness、Codex、opencode、CodeBuddy、WorkBuddy）和选定文本目录，用 BGE 语义嵌入与 SQLite FTS5 混合检索，返回可追溯原文、稳定 ID 和相邻上下文。
 
 检索不需要回答模型或 API key。初次模型安装按指令下载公开权重，日常检索在本地执行。历史索引默认放在 `~/.local/share/recall`，不在代码仓库里。
 

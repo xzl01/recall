@@ -1,6 +1,6 @@
 # recall
 
-Local retrieval for an agent's history and source code. Recall indexes Pi JSONL sessions and text directories, combines BGE embeddings with SQLite FTS5, and returns source snippets with stable IDs and neighboring context.
+Local retrieval for an agent's history and source code. Recall indexes the session history of six agents — Pi, DeepSeek Harness, Codex, opencode, CodeBuddy and WorkBuddy — plus selected text directories, combines BGE embeddings with SQLite FTS5, and returns source snippets with stable IDs and neighboring context.
 
 **Retrieval runs locally.** No LLM provider or API key is needed. Model setup downloads public weights when you request it. Your index stays outside the repository.
 
