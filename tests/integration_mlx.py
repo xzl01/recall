@@ -146,7 +146,7 @@ def main():
             json.dumps(
                 dict(
                     backend="mlx",
-                    device=a.device,
+                    configured_device=a.device,
                     openvino_installed=False,
                     lazy_client=True,
                     semantic_only_hit=bool(paraphrase),

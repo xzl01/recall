@@ -41,6 +41,50 @@ MODEL_FILES = ("config.json", "model.safetensors", "tokenizer.json")
 #: 能降到 200 MB 量级。
 CACHE_LIMIT_MB = int(os.environ.get("RECALL_MLX_CACHE_LIMIT_MB", "256"))
 
+#: 表示「就在 GPU 上」的设备名。MLX 永远在 Metal 上算，所以 ``RECALL_DEVICE`` /
+#: ``--device`` 对它没有意义 —— 这个值真正的作用是**常驻服务的兼容性匹配键**
+#: （见 ``daemon.whoami_payload``），不是计算设备。
+#:
+#: 日志必须把这两者分开：以前直接打印 ``device={self.device}``，于是
+#: ``RECALL_DEVICE=NPU`` 会打出「device=NPU」而实际跑在 GPU 上 —— 比不打印更容易
+#: 让人误判。
+GPU_LABELS = ("GPU", "METAL")
+
+
+def _metal_available(mx) -> bool:
+    metal = getattr(mx, "metal", None)
+    return bool(metal is not None and metal.is_available())
+
+
+def _actual_device(mx) -> str:
+    """MLX 实际在哪算：有 Metal 就是 GPU，否则 CPU。"""
+    if not _metal_available(mx):
+        return "CPU"
+    info: dict = {}
+    metal = getattr(mx, "metal", None)
+    for fetch in (getattr(mx, "device_info", None), getattr(metal, "device_info", None)):
+        if fetch is None:
+            continue
+        try:
+            info = fetch() or {}
+            break
+        except Exception:
+            continue
+    chip = info.get("device_name")
+    return f"Metal/GPU（{chip}）" if chip else "Metal/GPU"
+
+
+def _device_note(device, mx) -> str:
+    """``--device`` 与实际不符时说清它是干嘛的，别让它看起来生效了。"""
+    claimed = str(device or "").strip()
+    upper = claimed.upper()
+    if not upper or upper in GPU_LABELS:
+        return ""
+    if upper == "CPU" and not _metal_available(mx):
+        return ""  # 确实在 CPU 上跑，这个标注是对的
+    return f"；--device={claimed} 不参与计算（仅用于常驻服务匹配）"
+
+
 #: 一次 ``encode`` 处理这么多条以上，结束后就把 Metal 缓冲还回去。
 #: 单条查询走不到这个分支，不受影响。
 CLEAR_CACHE_MIN_TEXTS = 64
@@ -206,7 +250,8 @@ class MLXEmbedder:
         )
         if verbose:
             print(
-                f"[mlx] 后端 MLX device={self.device} batch={self.batch}，"
+                f"[mlx] 后端 MLX 实跑 {_actual_device(mx)}"
+                f"{_device_note(self.device, mx)} batch={self.batch}，"
                 f"模型就绪 {time.perf_counter() - t0:.2f}s",
                 flush=True,
             )

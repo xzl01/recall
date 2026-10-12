@@ -23,7 +23,9 @@ import time
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("model_dir", type=Path)
-    parser.add_argument("--device", default="CPU", help="仅作记录，llama.cpp 自己选后端")
+    parser.add_argument(
+        "--device", default="CPU", help="仅作常驻服务匹配；GGUF 默认 n_gpu_layers=0，即 CPU"
+    )
     a = parser.parse_args()
 
     import importlib.util
@@ -150,7 +152,7 @@ def main():
             json.dumps(
                 dict(
                     backend="gguf",
-                    device=a.device,
+                    configured_device=a.device,
                     model_identity_enforced=True,
                     setup_index_search_read=True,
                     directory_filter=True,

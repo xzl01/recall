@@ -50,6 +50,34 @@ def find_weights(model_dir: pathlib.Path) -> pathlib.Path:
     return found[0]
 
 
+#: 表示「就在 GPU 上」的设备名。llama.cpp 自己决定后端，``RECALL_DEVICE`` / ``--device``
+#: 对这个后端没有意义 —— 它只是**常驻服务的兼容性匹配键**（见 ``daemon.whoami_payload``）。
+#:
+#: 日志必须分开这两者。以前打印 ``device={self.device}``，而实际上构造 ``Llama`` 时
+#: 没有传 ``n_gpu_layers``，默认是 **0 —— 全程 CPU**；``llama_supports_gpu_offload()``
+#: 为 True 只说明这个库**能**用 GPU，不代表这个模型真的 offload 了。
+GPU_LABELS = ("GPU", "METAL")
+
+
+def _actual_device(llm) -> str:
+    """这个 GGUF 模型实际在哪算 —— 看 offload 了几层，不看库的能力。"""
+    layers = getattr(getattr(llm, "model_params", None), "n_gpu_layers", 0) or 0
+    try:
+        layers = int(layers)
+    except (TypeError, ValueError):
+        layers = 0
+    if layers == 0:
+        return "CPU（n_gpu_layers=0，未 offload）"
+    return f"GPU offload（n_gpu_layers={layers}）"
+
+
+def _device_note(device) -> str:
+    claimed = str(device or "").strip()
+    if not claimed or claimed.upper() in GPU_LABELS:
+        return ""
+    return f"；--device={claimed} 不参与计算（仅用于常驻服务匹配）"
+
+
 class GGUFEmbedder:
     """与 ``embedding.Embedder`` 同接口的 GGUF 实现。"""
 
@@ -112,7 +140,8 @@ class GGUFEmbedder:
             raise RuntimeError(f"GGUF 输出维度是 {dim}，recall 需要 {DIM}。")
         if verbose:
             print(
-                f"[gguf] 后端 GGUF device={self.device} batch={self.batch}，"
+                f"[gguf] 后端 GGUF 实跑 {_actual_device(self.llm)}"
+                f"{_device_note(self.device)} batch={self.batch}，"
                 f"模型就绪 {time.perf_counter() - t0:.2f}s（{self.weights.name}）",
                 flush=True,
             )

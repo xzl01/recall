@@ -290,8 +290,11 @@ GGUF 目录的 `manifest.json` **刻意不写 `source_sha256`**，身份按 `.gg
   `clear_cache()`。实测：默认 4.0 GB → 仅设上限 606 MB → 加上定期清理 204 MB。
 - **MLX 后端只支持 BERT 结构**。`mlx_embedding._Bert` 按 `model_type == "bert"` 校验，
   换成别的架构会显式报错，而不是给出错误结果。
-- **MLX 后端下 `--device` 不参与计算**。MLX 固定走 Metal，这个参数只是被原样记录，
-  `RECALL_DEVICE=GPU` 这类 OpenVINO 设备名不会影响 MLX 的结果。
+- **MLX 后端下 `--device` 不参与计算**。MLX 固定走 Metal（GPU），这个参数只是
+  **常驻服务的兼容性匹配键**，`RECALL_DEVICE=GPU` 这类 OpenVINO 设备名不会影响
+  MLX 的结果，也不会切到 CPU。为此日志打印的是**实际设备**；当 `--device` 与实际
+  不符时会注明它不参与计算 —— 以前直接回显该参数，于是 `RECALL_DEVICE=NPU` 会打出
+  「device=NPU」而实际跑在 GPU 上。
 - **`_get_compiled()` 在 MLX 下是空实现**。OpenVINO 需要按静态形状预编译，MLX 没有
   这个概念，按批内实际最长序列 padding 即可；保留该方法只为满足 daemon 预热协议的
   接口要求。
@@ -299,7 +302,11 @@ GGUF 目录的 `manifest.json` **刻意不写 `source_sha256`**，身份按 `.gg
   （系统代理，或设置 `HF_ENDPOINT`）；DoH 回退只做在 MLX 和 GGUF 的下载器里。
 - **MLX 只在 Apple Silicon 上有轮子**，其它平台装 `.[mlx]` 会被 pip 直接拒绝——
   这是有意的，比静默装不上更清楚。
-- **GGUF 的 `--device` 同样只是记录**，实际由 llama.cpp 自己选后端（有 Metal 就用）。
+- **GGUF 默认跑在 CPU 上**。构造 `Llama` 时没有传 `n_gpu_layers`，默认 0，也就是
+  一层都不 offload —— 即使 `llama_supports_gpu_offload()` 为 True。那个函数说的是
+  **这个库能不能**用 GPU，不是**这个模型有没有**用。日志因此按实际的
+  `n_gpu_layers` 报告，而不是回显 `--device`。想让 GGUF 走 GPU 就传
+  `n_gpu_layers=-1`；本项目的 f16 模型只有 4 层，收益有限，所以默认没开。
 - **GGUF 装的是 llama-cpp-python，没有预编译轮子**：`pip install '.[gguf]'` 会就地编译，
   需要 C++ 工具链与 cmake；没装的机器上会直接编译失败。
 - **GGUF 索引不可与 fp32 索引互换**（身份不同）。这是刻意的：量化档位之间差到 3e-02，
