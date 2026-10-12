@@ -44,14 +44,18 @@ identifiers and literal error strings suit the keyword half. For exact symbols o
 - `score` is cosine similarity and `rank_score` is rank fusion. Neither is a confidence
   probability. `semantic_rank`, `lexical_rank`, `matched_terms`, `selection_reason` and
   `fusion_rank` explain why a candidate was selected.
-- `parent` identifies the original record. `context_records` reports each neighbouring
-  window's record, time, role and position — do not attribute all neighbouring text to
-  the anchor's author or timestamp.
-- `truncated` / `text_chars` report clipping. Search adds one neighbouring window per
-  side within the same record; `--neighbors 0` returns the raw hit; `--full` lifts the
-  character budget.
-- `recall read` returns neighbouring windows from the same original record, not an
-  entire session or file.
+- **`search` results** carry `parent` and `offset_start`/`offset_end`. Two hits sharing a
+  `parent` are two windows of *one* message — windows overlap by 64 tokens, so near-identical
+  text is one record, not independent corroboration. `context_records` reports each
+  neighbouring window's record, time, role and position; do not attribute all neighbouring
+  text to the anchor's author or timestamp.
+- `truncated` / `text_chars` report clipping. Search adds one neighbouring window per side
+  within the same record; `--neighbors 0` returns the raw hit; `--full` lifts the character
+  budget.
+- **`read` returns a different, smaller shape**: `text` may already include neighbouring
+  windows merged in, and `window_ids` lists which windows contributed. It has no
+  `context_records` and no `parent`. A short message is a single window, so `--neighbors`
+  has nothing to add there and `window_ids` has length 1.
 
 Read more context or rephrase when evidence is incomplete. Check dates, roles and source
 versions when facts conflict: current code and reviewed conclusions may supersede old
