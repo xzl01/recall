@@ -11,7 +11,7 @@ HELP = """recall — local agent history and code retrieval
 Usage:
   recall setup [--from EXISTING_MODEL_DIR] [--mlx|--openvino|--gguf]
   recall index sessions [--force]      every agent below
-  recall index pi|dsh|codex|opencode   just one agent
+  recall index pi|dsh|codex|opencode|codebuddy|workbuddy   just one
   recall index dir PATH [--ext .py,.md]
   recall search "query" [--json] [-k 6] [--neighbors 1]
   recall "query" [--chat|--code] [--json] [--full]
@@ -21,12 +21,17 @@ Usage:
   recall migrate
 
 Agent history (`sessions` corpus, one per agent: sessions:pi, sessions:dsh, ...):
-  pi        ~/.pi/agent/sessions           plain JSONL           RECALL_SESSIONS_DIR
-  dsh       ~/.dsh/sessions                zstd JSONL events     RECALL_DSH_SESSIONS_DIR
-  codex     ~/.codex/sessions              plain JSONL           RECALL_CODEX_SESSIONS_DIR
-  opencode  ~/.local/share/opencode/opencode.db  SQLite          RECALL_OPENCODE_DB
+  pi         ~/.pi/agent/sessions              plain JSONL        RECALL_SESSIONS_DIR
+  dsh        ~/.dsh/sessions                   zstd JSONL events  RECALL_DSH_SESSIONS_DIR
+  codex      ~/.codex/sessions                 plain JSONL        RECALL_CODEX_SESSIONS_DIR
+  opencode   ~/.local/share/opencode/opencode.db  SQLite          RECALL_OPENCODE_DB
+  codebuddy  ~/.codebuddy/projects             plain JSONL        RECALL_CODEBUDDY_SESSIONS_DIR
+  workbuddy  ~/.workbuddy/projects             plain JSONL        RECALL_WORKBUDDY_SESSIONS_DIR
   Only conversation text is indexed (user/assistant), not tool calls or outputs.
-  `--chat` matches all of them (prefix `sessions`).
+  `--chat` matches all of them (prefix `sessions`). A directory that does not exist
+  is reported and skipped, so a machine that never ran an agent needs no setup.
+  Note: the CodeBuddy IDE keeps chats server-side and writes no local history; the
+  codebuddy source reads ~/.codebuddy/projects, which the CodeBuddy CLI writes.
 
 Global options (also accepted after a command):
   --home PATH           State directory (RECALL_HOME)

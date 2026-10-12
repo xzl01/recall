@@ -1,4 +1,4 @@
-# Agent 历史：四个来源
+# Agent 历史：六个来源
 
 `recall index sessions` 会读取它能找到的每个 agent 的历史，各自写进一个独立语料：
 
@@ -8,16 +8,37 @@
 | DeepSeek Harness | `~/.dsh/sessions` | zstd 压缩 JSONL 事件流 | `sessions:dsh` | `RECALL_DSH_SESSIONS_DIR` |
 | Codex CLI | `~/.codex/sessions` | 纯文本 JSONL | `sessions:codex` | `RECALL_CODEX_SESSIONS_DIR` |
 | opencode | `~/.local/share/opencode/opencode.db` | SQLite | `sessions:opencode` | `RECALL_OPENCODE_DB` |
+| CodeBuddy | `~/.codebuddy/projects` | 纯文本 JSONL | `sessions:codebuddy` | `RECALL_CODEBUDDY_SESSIONS_DIR` |
+| WorkBuddy | `~/.workbuddy/projects` | 纯文本 JSONL | `sessions:workbuddy` | `RECALL_WORKBUDDY_SESSIONS_DIR` |
 
 ```bash
 recall index sessions          # 全部
 recall index codex             # 只要一个
 recall index dsh --force       # 重建该语料
-recall "上次那个超时怎么配的" --chat          # 四个语料一起检索
+recall "上次那个超时怎么配的" --chat          # 所有语料一起检索
 recall search "keepalive" --corpus sessions:codex
 ```
 
 `--chat` 用的是 `sessions%` 前缀，所以新增 agent 的语料会自动被它覆盖，不用改检索侧。
+目录不存在的来源会打印一行「未找到 …，跳过」，所以从没跑过某个 agent 的机器不需要任何配置。
+
+## CodeBuddy 与 WorkBuddy
+
+腾讯这两个产品**共用同一套本地写入器**（会话文件里带一个 `__codebuddyLocal` 字段），
+所以是同一个格式、同一个读取器，只是根目录不同。
+
+但要注意它们**本地留存的东西不一样**：
+
+| | 本地有对话正文吗 | 说明 |
+| --- | --- | --- |
+| WorkBuddy | **有** | `~/.workbuddy/projects/<项目>/<会话>.jsonl`，纯 JSONL |
+| CodeBuddy CLI | 会有（同一格式） | 写 `~/.codebuddy/projects` |
+| CodeBuddy IDE | **没有** | 聊天记录在服务端；本地只剩 UI 状态、输入草稿、todos、plans |
+
+也就是说：只装过 **CodeBuddy IDE** 的机器上 `sessions:codebuddy` 会是空的，这不是读取器
+的问题 —— 盘上确实没有正文。实测 `~/Library/Application Support/CodeBuddy CN/` 里最大的
+一条 `state.vscdb` 记录是产品配置缓存（77 KB），`genie-history/*/conversations/` 全是空目录，
+`chat.ChatSessionStore.index` 是 `{"version":1,"entries":{}}`。
 
 ## 只索引对话正文
 
@@ -44,6 +65,9 @@ recall search "keepalive" --corpus sessions:codex
 | codex | 15,665 | 31.9 M字符 | 原始 **3.77 GB / 31 万行**，其中 487 行 >1 MiB |
 | dsh | 3,959 | 8.8 M字符 | 97 个 zstd 会话 |
 | opencode | 1,812 | 0.8 M字符 | SQLite 里 15,522 个 part，只有 1,932 个是 text |
+| workbuddy | 1,454 | 0.8 M字符 | 18 个会话文件 / 56.5 MB |
+| codebuddy | 0 | — | IDE 不落盘，见上文 |
+| pi | 0 | — | 这台机器没装 Pi |
 
 两个具体的坑：
 
@@ -121,6 +145,29 @@ opencode 已经迁到 SQLite：`~/.local/share/opencode/opencode.db`（旧的
 
 数据库以**只读**方式打开（`mode=ro`），不会干扰正在运行的 opencode。
 
+### CodeBuddy / WorkBuddy
+
+两个产品落盘布局一致：`<根>/<编码后的项目路径>/<会话 uuid>.jsonl`，一个会话一个文件，
+纯 JSONL。每行是一个事件，**只有 `type == "message"` 是对话正文**，而且正文在**顶层**
+（不是像 pi 那样嵌在 `message` 里）：
+
+```json
+{"type": "message", "role": "user", "timestamp": 1789543534454,
+ "sessionId": "...", "cwd": "...",
+ "content": [{"type": "input_text", "text": "..."}]}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `role` | `user`（块类型 `input_text`）/ `assistant`（块类型 `output_text`） |
+| `content` | 块数组，取每个块的 `text` |
+| `timestamp` | **epoch 毫秒**，统一转成 ISO 字符串 |
+
+同一个文件里还有 `function_call`、`function_call_result`、`reasoning`、
+`file-history-snapshot`、`ai-title` —— 全部跳过（工具调用与思维链，理由同其它 agent）。
+
+实测一台机器上 WorkBuddy 是 18 个会话文件 / 56.5 MB / 1454 条正文。
+
 ## 兼容旧索引
 
 老版本把 Pi 会话存在一个裸 `sessions` 语料里。现在索引 Pi 时会**就地改名**为
@@ -138,5 +185,12 @@ opencode 已经迁到 SQLite：`~/.local/share/opencode/opencode.db`（旧的
 2. 加进 `AGENTS` 和 `LABELS`
 3. 在 `iter_records` 里接上（文件型走 `_jsonl_files`，非文件型参照 opencode 的分支）
 4. 在 `config.py` 加路径常量，在 `engine.SESSION_ROOTS` 注册
+5. **三处测试隔离都要加上新根目录**：`tests/test_engine.py` 的 `setUp`、
+   `tests/test_cli.py` 的 `setUp`、以及 `tests/integration_mlx.py` /
+   `tests/integration_gguf.py` 的 `env`。漏掉任何一处，`index sessions` 就会去索引
+   开发机上**真实的**历史 —— 又慢又读了私有数据。这个坑踩过两次。
+
+共用格式的来源（像 CodeBuddy / WorkBuddy）不需要新读取器，在 `AGENTS` 里加一个名字、
+在 `iter_records` 的 `readers` 字典里指向同一个函数即可。
 
 `tests/test_sources.py` 每个来源都有一个用合成数据的最小用例，照着加即可。

@@ -50,6 +50,22 @@ OPENCODE_DB = (
     .expanduser()
     .resolve()
 )
+# 腾讯的两个 agent 共用同一套本地写入器（会话文件里有 `__codebuddyLocal` 字段），
+# 所以是同一个格式、同一个读取器，只是根目录不同。
+#
+# CodeBuddy IDE 的聊天记录在服务端，本地只留 UI 状态与指针，所以这个目录在只用过
+# IDE 的机器上通常不存在 —— `available()` 会返回 False，`index sessions` 打印一行
+# 「未找到」跳过，和 pi 一样。
+CODEBUDDY_SESSIONS_DIR = (
+    Path(os.environ.get("RECALL_CODEBUDDY_SESSIONS_DIR", str(Path.home() / ".codebuddy/projects")))
+    .expanduser()
+    .resolve()
+)
+WORKBUDDY_SESSIONS_DIR = (
+    Path(os.environ.get("RECALL_WORKBUDDY_SESSIONS_DIR", str(Path.home() / ".workbuddy/projects")))
+    .expanduser()
+    .resolve()
+)
 SOCKET_PATH = (
     Path(os.environ.get("RECALL_SOCKET", str(DATA_DIR / "embed.sock"))).expanduser().resolve()
 )

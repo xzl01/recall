@@ -224,8 +224,89 @@ def test_iter_records_names_sources_per_agent(tmp_path):
 
 
 def test_agent_registry_covers_the_documented_set():
-    assert sources.AGENTS == ("pi", "dsh", "codex", "opencode")
+    assert sources.AGENTS == ("pi", "dsh", "codex", "opencode", "codebuddy", "workbuddy")
     assert all(sources.LABELS[a] for a in sources.AGENTS)
+
+
+# ── codebuddy / workbuddy：两个产品共用一套写入器 ──────────────────
+
+
+def _cb_line(kind, **fields):
+    return json.dumps({"type": kind, "sessionId": "ses_1", "cwd": "/tmp/x", **fields})
+
+
+def test_codebuddy_reader_takes_top_level_role_and_content(tmp_path):
+    """与 pi 不同：正文在**顶层** content，时间戳是 epoch 毫秒。"""
+    path = tmp_path / "0dd227b4-a66a-4630-ab87-ec994dd57d47.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                _cb_line(
+                    "message",
+                    role="user",
+                    timestamp=1789543534454,
+                    content=[{"type": "input_text", "text": "把网关的超时改成 30 秒"}],
+                ),
+                _cb_line(
+                    "message",
+                    role="assistant",
+                    timestamp=1789543589746,
+                    content=[{"type": "output_text", "text": "已经改好，并补了重试退避。"}],
+                ),
+                # 这些都不是对话正文，必须跳过
+                _cb_line("function_call", name="bash", arguments="{}"),
+                _cb_line("function_call_result", output="huge tool output"),
+                _cb_line("reasoning", content=[{"type": "text", "text": "thinking"}]),
+                _cb_line("file-history-snapshot", isSnapshotUpdate=True),
+                _cb_line("ai-title", aiTitle="网关超时"),
+                # 短消息丢弃
+                _cb_line("message", role="assistant", timestamp=1789543589000, content="ok"),
+                # 非 user/assistant 的 message
+                _cb_line("message", role="system", timestamp=1789543589000, content="prompt"),
+            ]
+        )
+        + "\n"
+    )
+    rows = list(sources.iter_codebuddy_file(path))
+    assert [r[0] for r in rows] == ["user", "assistant"]
+    assert "30 秒" in rows[0][2] and "退避" in rows[1][2]
+    # epoch 毫秒 → 和别的 agent 一致的 ISO 字符串
+    assert rows[0][1].startswith("20") and len(rows[0][1]) == 19
+
+
+def test_both_tencent_agents_share_one_reader(tmp_path):
+    """codebuddy 与 workbuddy 只是根目录不同，读取器必须是同一个。"""
+    assert sources.AGENTS.index("codebuddy") + 1 == sources.AGENTS.index("workbuddy")
+    for agent in ("codebuddy", "workbuddy"):
+        root = tmp_path / agent
+        root.mkdir()
+        (root / "p").mkdir()
+        (root / "p" / "s.jsonl").write_text(
+            _cb_line(
+                "message",
+                role="user",
+                timestamp=1789543534454,
+                content=[{"type": "input_text", "text": f"{agent} 的历史正文"}],
+            )
+            + "\n"
+        )
+        rows = list(sources.iter_records(agent, root))
+        assert rows and rows[0][0] == "p/s.jsonl"
+        assert agent in rows[0][3]
+
+
+def test_workbuddy_is_skipped_cleanly_when_absent(tmp_path):
+    """目录不存在时 available() 为 False —— 只有过 IDE 的机器就是这种情况。"""
+    missing = tmp_path / "nope"
+    assert not missing.exists()
+    import recall.sources as s
+
+    original = s.source_path
+    s.source_path = lambda agent: missing  # type: ignore[assignment]
+    try:
+        assert s.available("workbuddy") is False
+    finally:
+        s.source_path = original  # type: ignore[assignment]
 
 
 def test_dsh_glob_matches_the_zstd_extension(tmp_path):

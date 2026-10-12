@@ -1,6 +1,6 @@
-"""各 agent 的会话读取器：pi / dsh / codex / opencode。
+"""各 agent 的会话读取器：pi / dsh / codex / opencode / codebuddy / workbuddy。
 
-四个 agent 的落盘格式各不相同，这里统一成同一种记录
+六个 agent 的落盘格式各不相同，这里统一成同一种记录
 ``(source, ts, role, text)``，再交给 engine 分块与索引。
 
 只取**对话正文**（user / assistant 的文本），不索引工具调用与工具输出：
@@ -12,6 +12,8 @@
 | dsh | `~/.dsh/sessions` | zstd 压缩 JSONL 事件流 | `user/message`、`assistant/message` |
 | codex | `~/.codex/sessions` | 纯文本 JSONL | `response_item` 中 `payload.role` 为 user/assistant |
 | opencode | `~/.local/share/opencode/opencode.db` | SQLite | `part` 表中 `type=text` 的条目 |
+| codebuddy | `~/.codebuddy/projects` | 纯文本 JSONL | `type=message` 的 `role`/`content` |
+| workbuddy | `~/.workbuddy/projects` | 纯文本 JSONL | 同上（两个产品共用一套写入器） |
 
 DSH 的会话是 **zstd 压缩**的：Python 3.14+ 自带 ``compression.zstd``，更早的版本需要
 ``pip install '.[dsh]'``（会装 ``zstandard``）。缺这个库时 DSH 会被跳过并给出提示，
@@ -27,16 +29,25 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Iterator
 
-from .config import CODEX_SESSIONS_DIR, DSH_SESSIONS_DIR, OPENCODE_DB, SESSIONS_DIR
+from .config import (
+    CODEBUDDY_SESSIONS_DIR,
+    CODEX_SESSIONS_DIR,
+    DSH_SESSIONS_DIR,
+    OPENCODE_DB,
+    SESSIONS_DIR,
+    WORKBUDDY_SESSIONS_DIR,
+)
 
 #: 支持的 agent，顺序即 `recall index sessions` 的处理顺序。
-AGENTS = ("pi", "dsh", "codex", "opencode")
+AGENTS = ("pi", "dsh", "codex", "opencode", "codebuddy", "workbuddy")
 
 LABELS = {
     "pi": "Pi",
     "dsh": "DeepSeek Harness",
     "codex": "Codex CLI",
     "opencode": "opencode",
+    "codebuddy": "CodeBuddy",
+    "workbuddy": "WorkBuddy",
 }
 
 #: 单条记录（一次发言）的字符上限。超过就跳过 —— 一次粘贴几 MB 的日志进索引
@@ -68,6 +79,8 @@ def source_path(agent: str) -> pathlib.Path:
         "dsh": DSH_SESSIONS_DIR,
         "codex": CODEX_SESSIONS_DIR,
         "opencode": OPENCODE_DB,
+        "codebuddy": CODEBUDDY_SESSIONS_DIR,
+        "workbuddy": WORKBUDDY_SESSIONS_DIR,
     }[agent]
 
 
@@ -271,6 +284,28 @@ def iter_codex_file(path: pathlib.Path, stats=None) -> Iterator[tuple[str, str, 
         yield role, (record.get("timestamp") or "")[:19], text
 
 
+def iter_codebuddy_file(path: pathlib.Path, stats=None) -> Iterator[tuple[str, str, str]]:
+    """CodeBuddy / WorkBuddy：``type=message`` 行的顶层 ``role`` 与 ``content``。
+
+    两个腾讯 agent 共用同一套本地写入器（会话文件里带 ``__codebuddyLocal`` 字段），
+    所以共用一个读取器。同一个文件里还有 ``function_call`` / ``function_call_result``
+    / ``reasoning`` / ``file-history-snapshot`` / ``ai-title``，都跳过。
+
+    与 pi 的区别：正文不在 ``message.content`` 里，而是**顶层**的 ``content``；
+    ``timestamp`` 是 epoch 毫秒。
+    """
+    for record in _lines(path, stats):
+        if record.get("type") != "message":
+            continue
+        role = record.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = _blocks_to_text(record.get("content")).strip()
+        if len(text) < MIN_CHARS:
+            continue
+        yield role, _iso_from_ms(record.get("timestamp")), text
+
+
 def iter_opencode_db(path: pathlib.Path) -> Iterator[tuple[str, str, str]]:
     """opencode：SQLite 里 ``part`` 表中 type=text 的条目，靠 message 拿 role。"""
     uri = f"file:{path}?mode=ro"
@@ -321,9 +356,17 @@ def iter_records(
             yield _session_source(root, source), ts, role, text
         return
 
-    readers = {"pi": iter_pi_file, "dsh": iter_dsh_file, "codex": iter_codex_file}
+    readers = {
+        "pi": iter_pi_file,
+        "dsh": iter_dsh_file,
+        "codex": iter_codex_file,
+        # 腾讯这两个产品共用一套写入器，所以是同一个读取器、两个根目录。
+        "codebuddy": iter_codebuddy_file,
+        "workbuddy": iter_codebuddy_file,
+    }
     reader = readers[agent]
-    takes_stats = agent in ("pi", "dsh", "codex")
+    # 只有 opencode 走 SQLite，其余都是文件型读取器，都回报跳过量。
+    takes_stats = agent != "opencode"
 
     if agent == "dsh":
         files = _jsonl_files(root, DSH_SESSION_GLOB)

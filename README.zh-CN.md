@@ -35,7 +35,23 @@ recall --read STABLE_ID --json
 
 如果已经有 BGE OpenVINO 模型目录（`tokenizer.json` 和 `ov/openvino_model.xml/.bin`），安装 `.[openvino]` 后执行 `recall setup --from /path/to/model`，可复用本地模型。
 
-`--chat` 只搜 Pi 历史，`--code` 搜已索引文本目录，其他 harness 的历史不会自动进入索引。可用 `--sessions-dir PATH` 指定 Pi 格式的合成数据或另一处会话目录。
+`recall index sessions` 会索引它能找到的每个 agent 的历史，各自一个语料（`sessions:pi`、`sessions:dsh`、`sessions:codex`、`sessions:opencode`、`sessions:codebuddy`、`sessions:workbuddy`）：
+
+| agent | 位置 | 格式 |
+| --- | --- | --- |
+| Pi | `~/.pi/agent/sessions` | 纯文本 JSONL |
+| DeepSeek Harness | `~/.dsh/sessions` | zstd 压缩 JSONL 事件流 |
+| Codex CLI | `~/.codex/sessions` | 纯文本 JSONL |
+| opencode | `~/.local/share/opencode/opencode.db` | SQLite |
+| CodeBuddy | `~/.codebuddy/projects` | 纯文本 JSONL |
+| WorkBuddy | `~/.workbuddy/projects` | 纯文本 JSONL |
+
+目录不存在的来源会打印一行「未找到 …，跳过」，所以没跑过某个 agent 的机器不需要配置。
+`--chat` 搜全部 agent 历史（`sessions` 前缀），`--code` 搜已索引文本目录。也支持
+`recall index codex` 这样只索引一个。
+
+注意 **CodeBuddy IDE 的聊天记录在服务端**，本地只有 UI 状态，没有可索引的正文；
+`~/.codebuddy/projects` 是 CodeBuddy CLI 写的位置。细节见 [docs/agent-history.md](docs/agent-history.md)。
 
 ## 检索规则
 
