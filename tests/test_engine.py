@@ -423,6 +423,171 @@ class RecallTests(unittest.TestCase):
         self.assertEqual(before, hashes())
         self.assertFalse((e.INDEX / "transaction.json").exists())
 
+    def test_overlapping_directory_corpora_are_not_deduplicated_away(self):
+        """先索引整个项目、再索引其中的子目录，子语料必须真的建起来。
+
+        parent 去重键不含 corpus，所以全局去重会把重叠语料整段吞掉：命令成功退出，
+        却一条都没进来，按子语料检索时报「没有内容」。
+        """
+        project = self.root / "project"
+        docs = project / "docs"
+        docs.mkdir(parents=True)
+        (docs / "readme.md").write_text(
+            "The Amber protocol reaches the gateway over a retained connection. " * 3
+        )
+
+        def index_dir(path, force=False):
+            run(
+                e.cmd_index,
+                types.SimpleNamespace(
+                    what="dir",
+                    path=str(path),
+                    force=force,
+                    device="GPU",
+                    batch=8,
+                    ext=".md",
+                    exclude="",
+                    include_vendor=False,
+                ),
+            )
+
+        index_dir(project)
+        index_dir(docs, force=True)
+        con = sqlite3.connect(e.DB)
+        corpora = {r[0] for r in con.execute("SELECT corpus FROM chunks")}
+        con.close()
+        self.assertTrue(
+            any(c.startswith("dir:docs:") for c in corpora), f"子目录语料没建起来: {corpora}"
+        )
+        self.assertTrue(any(c.startswith("dir:project:") for c in corpora), corpora)
+
+    def test_nested_corpus_read_does_not_splice_the_other_copy(self):
+        """同一文件同时属于两个语料时，read 的兄弟窗口必须限定在同一语料内。
+
+        两份副本的 parent 与 start/end 完全相同，跨语料取兄弟会把整段正文拼两遍。
+        """
+        project = self.root / "project"
+        docs = project / "docs"
+        docs.mkdir(parents=True)
+        # 需要多个窗口，否则没有「兄弟」可拼。
+        body = "The Amber protocol reaches the gateway over a retained connection. " * 90
+        (docs / "readme.md").write_text(body + "\nDISTINCT_TAIL_MARKER\n")
+
+        def index_dir(path):
+            run(
+                e.cmd_index,
+                types.SimpleNamespace(
+                    what="dir",
+                    path=str(path),
+                    force=False,
+                    device="GPU",
+                    batch=8,
+                    ext=".md",
+                    exclude="",
+                    include_vendor=False,
+                ),
+            )
+
+        index_dir(project)
+        index_dir(docs)
+        hits = json.loads(
+            run(
+                e.cmd_search,
+                types.SimpleNamespace(
+                    query="Amber protocol",
+                    k=3,
+                    mode="semantic",
+                    device="GPU",
+                    corpus="dir:docs",
+                    json=True,
+                    width=220,
+                    chars=0,
+                    neighbors=0,
+                ),
+            )
+        )
+        self.assertTrue(hits)
+        value = json.loads(
+            run(
+                e.cmd_read,
+                types.SimpleNamespace(id=hits[0]["id"], neighbors=8, chars=0, json=True),
+            )
+        )
+        self.assertEqual(value["text"].count("DISTINCT_TAIL_MARKER"), 1, value["text"][-400:])
+
+    def test_index_refuses_a_different_embedding_model(self):
+        """换一份权重会整体改变向量空间，必须拦下而不是静默给出错误结果。"""
+        model = self.root / "model"
+        model.mkdir()
+        (model / "model.safetensors").write_bytes(b"weights-A")
+
+        class ModelEmbedding:
+            model_dir = model
+
+            def encode(self, texts, is_query=False, normalize=True):
+                import numpy as np
+
+                out = np.zeros((len(texts), 512), dtype=np.float32)
+                out[:, 0] = 1.0
+                return out
+
+            def encode_query(self, text, **kw):
+                return self.encode([text], is_query=True)
+
+        original = e.resolve_embedder
+        e.resolve_embedder = lambda *a, **k: ModelEmbedding()
+        try:
+            self.write("Remember the Amber protocol for the gateway.")
+            run(e.cmd_index, index_args())
+            con = sqlite3.connect(e.DB)
+            recorded = con.execute("SELECT value FROM meta WHERE key='embedding_id'").fetchone()
+            con.close()
+            self.assertIsNotNone(recorded, "索引应当记录嵌入模型指纹")
+
+            (model / "model.safetensors").write_bytes(b"weights-B")
+            with self.assertRaises(SystemExit) as caught:
+                search("Amber protocol")
+            self.assertIn("另一份嵌入模型", str(caught.exception))
+        finally:
+            e.resolve_embedder = original
+
+    def test_journal_is_published_atomically(self):
+        """发布日志必须先写完整再原子改名，不能留下半截 JSON 卡死整个索引。"""
+        self.write("A robust remembered fact about journal atomicity.")
+        run(e.cmd_index, index_args())
+        before = hashes()
+        stage = self.root / "stage"
+        stage.mkdir()
+        for name in ("meta.db", "vectors.npy"):
+            (stage / name).write_bytes(b"new-pair")
+
+        real_dump = support.json.dump
+
+        def broken_dump(state, handle, *a, **k):
+            handle.write('{"meta.db":')
+            handle.flush()
+            raise KeyboardInterrupt
+
+        support.json.dump = broken_dump
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                support.publish(stage, e.INDEX)
+        finally:
+            support.json.dump = real_dump
+
+        self.assertFalse((e.INDEX / "transaction.json").exists(), "不能留下半截日志")
+        self.assertFalse((e.INDEX / ".transaction.new").exists())
+        self.assertEqual(before, hashes(), "两侧文件都应保持原样")
+        run(e.cmd_stats, types.SimpleNamespace())  # 索引仍然可用
+
+    def test_malformed_journal_reports_an_actionable_error(self):
+        self.write("A robust remembered fact about damaged journals.")
+        run(e.cmd_index, index_args())
+        (e.INDEX / "transaction.json").write_text('{"meta.db":')
+        with self.assertRaises(RuntimeError) as caught:
+            run(e.cmd_stats, types.SimpleNamespace())
+        self.assertIn("事务日志损坏", str(caught.exception))
+
     def test_concurrent_cli_readers_and_writer(self):
         path = self.write("Original concurrent lookup for the Amber protocol.")
         run(e.cmd_index, index_args())

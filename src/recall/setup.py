@@ -2,7 +2,6 @@
 
 import argparse
 import contextlib
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +12,7 @@ import urllib.request
 
 from .backend import active_backend
 from .config import MODEL_DIR, MLX_MODEL_DIR
+from .identity import file_sha256
 
 MODEL_ID = "BAAI/bge-small-zh-v1.5"
 MODEL_REVISION = "7999e1d3359715c523056ef9478215996d62a620"
@@ -187,7 +187,9 @@ def install_mlx(args):
             "dimension": 512,
             "pooling": "CLS",
             "normalized": True,
-            "sha256": {n: hashlib.sha256((stage / n).read_bytes()).hexdigest() for n in MLX_FILES},
+            # 索引靠这个摘要认定「同一份权重」。两个后端记的应该是同一个值。
+            "source_sha256": file_sha256(stage / "model.safetensors"),
+            "sha256": {n: file_sha256(stage / n) for n in MLX_FILES},
         }
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         if destination.exists():
@@ -273,6 +275,7 @@ def install_openvino(a):
     with tempfile.TemporaryDirectory(prefix=".model-stage-", dir=destination.parent) as temp:
         stage = Path(temp) / "model"
         (stage / "ov").mkdir(parents=True)
+        source_weights = None
         if a.existing:
             validate(a.existing)
             for name in FILES:
@@ -301,6 +304,7 @@ def install_openvino(a):
             )
             model.save_pretrained(stage / "ov")
             shutil.copy2(source / "tokenizer.json", stage / "tokenizer.json")
+            source_weights = source / "model.safetensors"
         validate(stage)
         manifest = {
             "model": MODEL_ID,
@@ -308,7 +312,15 @@ def install_openvino(a):
             "dimension": 512,
             "pooling": "CLS",
             "normalized": True,
-            "sha256": {n: hashlib.sha256((stage / n).read_bytes()).hexdigest() for n in FILES},
+            # 记录**源权重**摘要而不是 IR 产物摘要：MLX 后端用的是同一份
+            # model.safetensors，因此两个后端能共用同一个索引身份。
+            # 导入别人导出的 IR（--from）时拿不到源权重，只能留空退回产物摘要。
+            "source_sha256": (
+                file_sha256(source_weights)
+                if source_weights is not None and source_weights.is_file()
+                else None
+            ),
+            "sha256": {n: file_sha256(stage / n) for n in FILES},
         }
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         if destination.exists():

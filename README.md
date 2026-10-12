@@ -27,7 +27,7 @@ python3 -m venv .venv
 
 `recall setup` follows the platform default; pass `--mlx` or `--openvino` to force the other one. `RECALL_BACKEND=auto` (the default) takes the platform default and falls back to the other engine if its dependency is missing, so Linux behaviour is unchanged. An explicit `RECALL_BACKEND=openvino|mlx` never falls back — it errors instead of silently switching.
 
-Both engines load the **same** `BAAI/bge-small-zh-v1.5` weights and keep the same semantics: CLS pooling, L2 normalisation, 512 dimensions, and the same Chinese query prefix. `vectors.npy` is therefore identical in shape and meaning across backends, and existing indexes stay valid.
+Both engines load the **same** `BAAI/bge-small-zh-v1.5` weights and keep the same semantics: CLS pooling, L2 normalisation, 512 dimensions, and the same Chinese query prefix, so an index built by one engine can be read by the other. The index now records the **model identity** it was built from (the source `model.safetensors` digest, which both engines share) and refuses to search or append with a different one — swapping weights for another 512-dimension BERT used to silently return wrong results.
 
 Measured on one Apple Silicon machine against a `transformers` reference on the same `model.safetensors`: MLX differs by 8.0e-07, while OpenVINO differs by 1.4e-03 (its own graph-optimisation numerics, long-standing upstream behaviour — not introduced here). The practical effect is nil: over a 6-document corpus and 5 mixed-language queries the two backends produced **identical top-k rankings**, with scores differing in the fourth decimal. See [docs/backends.md](docs/backends.md) for the numbers and caveats.
 

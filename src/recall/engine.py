@@ -16,6 +16,7 @@ import numpy as np
 
 from .embedding import Embedder
 from .daemon import resolve_embedder
+from .identity import model_identity
 from .support import (
     token_windows,
     compact_query,
@@ -75,6 +76,62 @@ def chunk_key(source: str, ts: str, role: str, text: str) -> str:
     """
     raw = "\x00".join((source or "", ts or "", role or "", text or ""))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+
+
+IDENTITY_KEY = "embedding_id"
+
+
+def recorded_identity(con) -> str | None:
+    """索引里记录的嵌入模型身份；旧索引没有 meta 表时返回 None。"""
+    has_meta = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+    ).fetchone()
+    if not has_meta:
+        return None
+    found = con.execute("SELECT value FROM meta WHERE key=?", (IDENTITY_KEY,)).fetchone()
+    return found[0] if found else None
+
+
+def stamp_identity(con, value: str) -> None:
+    con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (IDENTITY_KEY, value))
+    globals()["_INDEX_DIRTY"] = True
+
+
+def guard_identity(con, embedder, *, stamp: bool) -> str | None:
+    """索引记录的模型身份必须和当前要用的模型一致。
+
+    换一份权重（哪怕是同为 512 维的 BERT）会整体改变向量空间，混进同一个索引会
+    让检索**静默**给出错误结果。所以这里硬性拦下，要求重建，而不是照常返回。
+    """
+    model_dir = getattr(embedder, "model_dir", None)
+    if model_dir is None:
+        return None
+    current = model_identity(model_dir)
+    if current is None:
+        # 目录里没有可识别的权重（测试替身/自定义布局）：宁可跳过校验也不拒绝服务。
+        # 真实后端不可能走到这里，因为它们本来就要求加载标准权重文件。
+        return None
+    recorded = recorded_identity(con)
+    if recorded is None:
+        if stamp:
+            stamp_identity(con, current)
+        else:
+            print(
+                "提示：索引未记录嵌入模型指纹（旧索引）。跑一次 recall index 会补记录，"
+                "之后才能校验模型有没有被换过。",
+                file=sys.stderr,
+            )
+        return current
+    if recorded != current:
+        sys.exit(
+            "索引是用另一份嵌入模型建立的，继续使用会让检索结果静默变错：\n"
+            f"  索引记录: {recorded}\n"
+            f"  当前模型: {current}\n"
+            f"  模型目录: {model_dir}\n"
+            "请用新的 RECALL_HOME 重建索引，或换回原来那份模型。"
+        )
+    return current
 
 
 def db_connect():
@@ -297,15 +354,18 @@ def cmd_index(a):
         n = purge_corpus(con, corpus_name)
         print(f"--force：已清除语料 {corpus_name} 的 {n} 条旧记录，重新索引")
 
-    parents = {p or key for p, key in con.execute("SELECT parent,key FROM chunks")}
+    # 去重必须按 (corpus, parent) 作用域：parent 键不含 corpus，全局去重会让
+    # 「先索引整个项目、再单独索引其中的子目录」这类重叠语料被整段吞掉——
+    # 命令成功退出，却一条都没进来，按子语料检索时报「没有内容」。
+    seen = {(c, p or k) for c, p, k in con.execute("SELECT corpus,parent,key FROM chunks")}
     fresh = []
     skipped = 0
     for c, source, ts, role, text in items:
         parent = chunk_key(source, ts, role, text)
-        if parent in parents:
+        if (c, parent) in seen:
             skipped += 1
             continue
-        parents.add(parent)
+        seen.add((c, parent))
         for fragment, start, end in token_windows(text):
             fresh.append((c, source, ts, role, fragment, parent, start, end))
     print(f"待嵌入 {len(fresh)} 个窗口（跳过已索引 {skipped} 条原始记录）")
@@ -320,6 +380,7 @@ def cmd_index(a):
 def store_items(con, items, device, batch):
     globals()["_INDEX_DIRTY"] = True
     emb = resolve_embedder(device, batch=batch, verbose=True)
+    guard_identity(con, emb, stamp=True)
     next_id = con.execute("SELECT COALESCE(MAX(id),0) FROM chunks").fetchone()[0]
     vector_groups = []
     for offset in range(0, len(items), 256):
@@ -473,6 +534,7 @@ def cmd_search(a):
         sys.exit("索引行数与向量不一致，请恢复备份。")
     query, trimmed = compact_query(a.query)
     emb = resolve_embedder(a.device, batch=1)
+    guard_identity(con, emb, stamp=False)
     q = emb.encode_query(query)[0]
     scores = np.asarray(vecs) @ q
     where = ""
@@ -621,8 +683,11 @@ def cmd_read(a):
         sys.exit("未找到窗口；索引可能已更新，请重新检索。")
     group = [row]
     if row[7]:
+        # 同一个文件可能既属于包含它的目录语料、又属于它自己的语料，parent 会重复；
+        # 兄弟窗口必须限定在同一个语料里，否则会把两份副本拼进同一段上下文。
         siblings = con.execute(
-            "SELECT " + fields + " FROM chunks WHERE parent=? ORDER BY start,id", (row[7],)
+            "SELECT " + fields + " FROM chunks WHERE parent=? AND corpus=? ORDER BY start,id",
+            (row[7], row[1]),
         ).fetchall()
         position = next(j for j, r in enumerate(siblings) if r[0] == row[0])
         group = siblings[max(0, position - a.neighbors) : position + a.neighbors + 1]

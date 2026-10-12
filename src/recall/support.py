@@ -91,7 +91,15 @@ def recover(index):
     journal = index / "transaction.json"
     if not journal.exists():
         return
-    state = json.loads(journal.read_text())
+    try:
+        state = json.loads(journal.read_text())
+    except ValueError:
+        # 半截日志无法判断哪一侧已经被替换，宁可停下也不猜。先落盘完整日志再原子
+        # 改名之后不会再产生这种文件；这里只兜住历史遗留或外部写入的损坏日志。
+        raise RuntimeError(
+            f"事务日志损坏：{journal}。meta.db/vectors.npy 大概率仍是配对的，"
+            "确认无误后删除该日志即可恢复；否则从备份恢复。"
+        ) from None
     if set(state) != {"meta.db", "vectors.npy"} or any(type(v) is not bool for v in state.values()):
         raise RuntimeError("Invalid recall transaction journal; restore the saved backup.")
     for name in ["meta.db", "vectors.npy"]:
@@ -141,10 +149,19 @@ def publish(stage, index):
         if exists:
             shutil.copy2(index / name, index / (".rollback-" + name))
     journal = index / "transaction.json"
-    with journal.open("w") as f:
-        json.dump(state, f)
-        f.flush()
-        os.fsync(f.fileno())
+    # 先把**完整**日志落盘并 fsync，再原子改名就位。直接写正式路径的话，写到一半
+    # 被打断会留下半截 JSON：此时两侧文件都还没换，但此后每条命令都会在 recover
+    # 里解析失败，一个完好的索引就此打不开。
+    pending = index / ".transaction.new"
+    try:
+        with pending.open("w") as f:
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(pending, journal)
+    except BaseException:
+        pending.unlink(missing_ok=True)
+        raise
     try:
         for name in state:
             os.replace(stage / name, index / name)
